@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict
 
 import requests
@@ -11,6 +12,9 @@ from src.news import NewsItem, summarize_news_for_prompt
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_GPT_NEWS_LIMIT = 12
+DEFAULT_MAX_OUTPUT_TOKENS = 1200
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def generate_market_commentary(
@@ -24,8 +28,10 @@ def generate_market_commentary(
         return _fallback_commentary(snapshots, prediction_summary, news_items), "local_fallback_no_api_key"
 
     model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    max_output_tokens = _env_int("OPENAI_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
     payload = {
         "model": model,
+        "max_output_tokens": max_output_tokens,
         "input": [
             {
                 "role": "developer",
@@ -38,23 +44,19 @@ def generate_market_commentary(
         ],
     }
     try:
-        response = requests.post(
-            OPENAI_RESPONSES_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=60,
+        response = _post_with_retries(
+            payload=payload,
+            api_key=api_key,
+            attempts=_env_int("OPENAI_RETRY_ATTEMPTS", 3),
         )
-        response.raise_for_status()
         text = _extract_response_text(response.json())
         if text:
             return text.strip(), f"openai_responses_api:{model}"
     except Exception as exc:
         return (
             _fallback_commentary(snapshots, prediction_summary, news_items)
-            + f"\n\n> GPT 分析未启用或调用失败，已使用本地规则生成。错误：{exc}",
+            + "\n\n"
+            + f"> GPT 分析调用失败，已使用本地规则生成。原因：{_friendly_error(exc)}",
             "local_fallback_api_error",
         )
     return _fallback_commentary(snapshots, prediction_summary, news_items), "local_fallback_empty_response"
@@ -70,7 +72,8 @@ def _build_prompt(
         ensure_ascii=False,
         indent=2,
     )
-    news_text = summarize_news_for_prompt(news_items)
+    news_limit = _env_int("GPT_NEWS_LIMIT", DEFAULT_GPT_NEWS_LIMIT)
+    news_text = summarize_news_for_prompt(news_items, max_items=news_limit)
     return f"""
 请根据以下数据生成一份中文市场解读，供个人每日投资参考。
 
@@ -91,6 +94,41 @@ def _build_prompt(
 """.strip()
 
 
+def _post_with_retries(
+    payload: dict,
+    api_key: str,
+    attempts: int,
+) -> requests.Response:
+    attempts = max(1, attempts)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(
+                OPENAI_RESPONSES_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=90,
+            )
+            if response.status_code not in RETRYABLE_STATUS_CODES:
+                response.raise_for_status()
+                return response
+            last_error = _build_http_error(response)
+            if attempt == attempts:
+                raise last_error
+            time.sleep(_retry_delay(response, attempt))
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt == attempts:
+                raise
+            time.sleep(min(45, 5 * attempt))
+    if last_error:
+        raise last_error
+    raise RuntimeError("OpenAI API request failed.")
+
+
 def _extract_response_text(payload: dict) -> str:
     if "output_text" in payload and payload["output_text"]:
         return str(payload["output_text"])
@@ -100,6 +138,56 @@ def _extract_response_text(payload: dict) -> str:
             if content.get("type") in {"output_text", "text"} and content.get("text"):
                 chunks.append(str(content["text"]))
     return "\n".join(chunks)
+
+
+def _build_http_error(response: requests.Response) -> requests.HTTPError:
+    error = requests.HTTPError(_friendly_response_message(response), response=response)
+    return error
+
+
+def _retry_delay(response: requests.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(90.0, max(1.0, float(retry_after)))
+        except ValueError:
+            pass
+    return min(90.0, 10.0 * attempt)
+
+
+def _friendly_error(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, requests.Response):
+        return _friendly_response_message(response)
+    return str(exc)
+
+
+def _friendly_response_message(response: requests.Response) -> str:
+    message = ""
+    try:
+        payload = response.json()
+        error = payload.get("error", {})
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("code") or ""
+    except ValueError:
+        message = response.text[:200].strip()
+    if response.status_code == 429:
+        return (
+            "OpenAI API 返回 429，通常表示当前账号额度不足、项目限流，"
+            "或短时间请求过多。请检查 OpenAI Billing / Limits，或稍后重试。"
+            + (f" 原始信息：{message}" if message else "")
+        )
+    return f"OpenAI API 返回 {response.status_code}。{message}".strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _fallback_commentary(
