@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+from src.models import optional_model_status
+from src.preprocessing import DataQualityReport
+
+
+def write_summary(
+    ticker: str,
+    quality: DataQualityReport,
+    metrics: pd.DataFrame,
+    forecast: pd.DataFrame,
+    output_dir: Path,
+    figure_paths: dict[str, Path],
+    optional_status: pd.DataFrame | None = None,
+) -> Path:
+    best = metrics.iloc[0]
+    latest_forecast = forecast.iloc[0]
+    five_day = forecast.iloc[-1]
+    optional_status = optional_status if optional_status is not None else optional_model_status()
+    path = output_dir / "summary.md"
+    lines = [
+        f"# {ticker} 预测分析简报",
+        "",
+        "## 数据概况",
+        "",
+        f"- 数据时间范围：{quality.start_date} 至 {quality.end_date}",
+        f"- 清洗前记录数：{quality.rows_before}",
+        f"- 清洗后记录数：{quality.rows_after}",
+        f"- 使用价格字段：{quality.price_column}",
+        f"- 删除重复日期：{quality.duplicate_dates_removed}",
+        f"- 删除无效或非正价格行：{quality.nonpositive_price_rows_removed}",
+        f"- 是否包含成交量：{'是' if quality.has_volume else '否'}",
+        "",
+        "## 模型表现",
+        "",
+        f"- 当前最佳模型：{best['Model']}",
+        f"- RMSE：{best['RMSE']:.4f}",
+        f"- MAE：{best['MAE']:.4f}",
+        f"- MAPE：{best['MAPE']:.2f}%",
+        f"- 方向准确率：{best['Directional_Accuracy']:.2f}%",
+        "",
+        "## 近期预测",
+        "",
+        f"- 下一交易日预测方向：{latest_forecast['Predicted_Direction']}",
+        f"- 下一交易日预测收益率：{latest_forecast['Predicted_Return']:.4%}",
+        f"- 下一交易日预测价格：{latest_forecast['Predicted_Price']:.4f}",
+        f"- 第 5 个交易日滚动预测价格：{five_day['Predicted_Price']:.4f}",
+        "",
+        "## 可选组件状态",
+        "",
+    ]
+    for _, row in optional_status.iterrows():
+        lines.append(f"- {row['Component']}：{row['Status']}")
+
+    lines.extend(
+        [
+            "",
+            "## 图表文件",
+            "",
+        ]
+    )
+    for name, figure_path in figure_paths.items():
+        lines.append(f"- {name}：{figure_path.name}")
+
+    lines.extend(
+        [
+            "",
+            "## 风险提示",
+            "",
+            "- 预测结果只适合作为个人研究和日常参考，不构成投资建议。",
+            "- 股票和 ETF 价格受宏观、新闻、流动性和突发事件影响，历史规律不保证未来继续有效。",
+            "- 工具使用时间顺序切分训练集和测试集，避免随机切分导致的数据泄漏，但短期预测仍可能出现较大误差。",
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def write_run_metadata(
+    output_dir: Path,
+    source: str,
+    ticker: str,
+    feature_columns: list[str],
+    quality: DataQualityReport,
+) -> Path:
+    path = output_dir / "run_metadata.md"
+    missing_after = ", ".join(
+        f"{key}: {value}" for key, value in quality.missing_after.items()
+    )
+    lines = [
+        f"# {ticker} 运行信息",
+        "",
+        f"- 数据来源：{source}",
+        f"- 特征数量：{len(feature_columns)}",
+        f"- 日期范围：{quality.start_date} 至 {quality.end_date}",
+        f"- 清洗后缺失值：{missing_after}",
+        "",
+        "## 特征列表",
+        "",
+    ]
+    lines.extend(f"- {feature}" for feature in feature_columns)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
