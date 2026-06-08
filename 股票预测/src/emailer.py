@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import smtplib
 from email.message import EmailMessage
+from mimetypes import guess_type
 from pathlib import Path
 
 
@@ -10,6 +11,8 @@ def send_report_email(
     report_path: Path,
     subject: str,
     recipients: list[str] | None = None,
+    html_path: Path | None = None,
+    inline_images: dict[str, Path] | None = None,
 ) -> tuple[bool, str]:
     recipients = recipients or _env_recipients()
     if not recipients:
@@ -28,11 +31,15 @@ def send_report_email(
         return False, "SMTP_HOST/SMTP_USER/SMTP_PASSWORD/SMTP_FROM 未完整配置，跳过邮件发送。"
 
     body = report_path.read_text(encoding="utf-8")
+    html_body = html_path.read_text(encoding="utf-8") if html_path else None
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = smtp_from
     message["To"] = ", ".join(recipients)
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
+        _attach_inline_images(message, inline_images or {})
     message.add_attachment(
         body.encode("utf-8"),
         maintype="text",
@@ -69,3 +76,21 @@ def send_report_email(
 def _env_recipients() -> list[str]:
     raw = os.getenv("REPORT_EMAIL_TO", "")
     return [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
+
+
+def _attach_inline_images(message: EmailMessage, inline_images: dict[str, Path]) -> None:
+    if not inline_images:
+        return
+    html_part = message.get_payload()[-1]
+    for cid, path in inline_images.items():
+        if not path.exists():
+            continue
+        content_type = guess_type(path.name)[0] or "image/png"
+        maintype, subtype = content_type.split("/", 1)
+        html_part.add_related(
+            path.read_bytes(),
+            maintype=maintype,
+            subtype=subtype,
+            cid=f"<{cid}>",
+            filename=path.name,
+        )

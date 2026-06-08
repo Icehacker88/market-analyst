@@ -133,6 +133,7 @@ outputs/SPY/20260608_101530/
 投资日报会额外输出：
 
 - `summary.md`：专业投资日报
+- `summary.html`：更美观的 HTML 邮件正文，包含市场表格、模型表格和关键图表
 - `market_snapshot.csv`：市场技术面快照
 - `market_snapshot.md`：市场技术面说明
 - `news_24h.csv`：最近24小时新闻
@@ -164,7 +165,7 @@ export OPENAI_MODEL="gpt-5-mini"
 
 ## 邮件发送配置
 
-运行日报后自动尝试发送邮件。需要配置：
+运行日报后自动尝试发送邮件。邮件正文会优先使用 `summary.html`，并内嵌关键图表；同时会把 `summary.md` 作为附件发送。需要配置：
 
 ```bash
 export REPORT_EMAIL_TO="your_email@example.com"

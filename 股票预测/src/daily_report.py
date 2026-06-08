@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.data_loader import download_yahoo_chart
 from src.emailer import send_report_email
+from src.email_report import write_html_daily_report
 from src.gpt_analysis import generate_market_commentary
 from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_frame, save_market_snapshot
 from src.news import NEWS_KEYWORDS, fetch_recent_news, save_news
@@ -93,10 +94,21 @@ def run_daily_report(
             "prediction_csv": prediction_path,
         },
     )
+    html_path, inline_images = write_html_daily_report(
+        report_dir=report_dir,
+        generated_at_text=beijing_now.strftime("%Y-%m-%d %H:%M:%S"),
+        snapshots=snapshots,
+        prediction_frame=prediction_frame,
+        news_items=news_items,
+        commentary=commentary,
+        commentary_source=commentary_source,
+    )
     _, message = send_report_email(
         report_path=summary_path,
         subject=f"投资日报 {beijing_now.strftime('%Y-%m-%d')}",
         recipients=email_to,
+        html_path=html_path,
+        inline_images=inline_images,
     )
     (report_dir / "email_status.txt").write_text(message + "\n", encoding="utf-8")
     print(f"投资日报完成：{summary_path}")
