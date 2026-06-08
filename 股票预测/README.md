@@ -173,6 +173,7 @@ export SMTP_PORT="587"
 export SMTP_USER="your_smtp_user"
 export SMTP_PASSWORD="your_smtp_password"
 export SMTP_FROM="your_email@example.com"
+export SMTP_SECURITY="auto"
 ```
 
 也可以命令行指定收件人：
@@ -182,6 +183,25 @@ python main.py --daily-report --email-to your_email@example.com
 ```
 
 如果邮箱或 SMTP 没配置完整，工具会跳过邮件发送，并在 `email_status.txt` 写明原因。
+
+SMTP 加密方式说明：
+
+- `SMTP_SECURITY=auto`：默认推荐。端口 `465` 自动使用 SSL，其他端口自动使用 STARTTLS。
+- `SMTP_SECURITY=ssl`：适合 465 端口。
+- `SMTP_SECURITY=starttls`：适合 587 端口。
+- `SMTP_SECURITY=plain`：不加密，通常不推荐。
+
+常见配置：
+
+```bash
+# Gmail / Outlook 常见方式
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+
+# 部分邮箱服务商使用
+SMTP_PORT=465
+SMTP_SECURITY=ssl
+```
 
 ## GitHub Actions 自动运行
 
@@ -200,6 +220,7 @@ python main.py --daily-report --email-to your_email@example.com
 - `SMTP_USER`
 - `SMTP_PASSWORD`
 - `SMTP_FROM`
+- `SMTP_SECURITY`：可选，也可配置为 Repository Variable；不填时默认 `auto`
 
 ## 特征说明
 

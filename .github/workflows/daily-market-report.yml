@@ -38,6 +38,7 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_SECURITY: ${{ vars.SMTP_SECURITY || 'auto' }}
         run: |
           python main.py --daily-report --market-start 2024-01-01 --output-dir outputs
 
