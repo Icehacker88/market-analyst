@@ -162,9 +162,10 @@ export OPENAI_MODEL="gpt-5-mini"
 export OPENAI_MAX_OUTPUT_TOKENS="1200"
 export OPENAI_RETRY_ATTEMPTS="3"
 export GPT_NEWS_LIMIT="12"
+export DISABLE_GPT_ANALYSIS="false"
 ```
 
-如果不配置 `OPENAI_API_KEY`，日报仍会生成，只是 `GPT市场分析` 部分会使用本地规则 fallback。
+如果不配置 `OPENAI_API_KEY`，日报仍会生成，只是 `GPT市场分析` 部分会使用本地规则 fallback。当前 GitHub Actions 邮件日报默认设置了 `DISABLE_GPT_ANALYSIS=true`，因此邮件不会调用 OpenAI API，也不会产生 API 费用。
 
 可选参数说明：
 
@@ -172,6 +173,7 @@ export GPT_NEWS_LIMIT="12"
 - `OPENAI_MAX_OUTPUT_TOKENS`：限制 GPT 输出长度，默认 `1200`，可以控制成本和运行时间。
 - `OPENAI_RETRY_ATTEMPTS`：调用失败后的重试次数，默认 `3`。
 - `GPT_NEWS_LIMIT`：传给 GPT 的新闻条数，默认 `12`。完整新闻仍会保存在 `news_24h.csv` 和 `news_24h.md`。
+- `DISABLE_GPT_ANALYSIS`：设置为 `true` 时强制使用本地规则解读，不调用 OpenAI API。
 
 如果日报显示 `local_fallback_api_error`，说明已经尝试调用 GPT，但 API 返回错误。最常见原因是 OpenAI 账号额度、Billing、项目 Limits 或短时间请求过多。此时工具会自动退回本地规则解读，避免整份日报失败。
 
@@ -224,12 +226,8 @@ SMTP_SECURITY=ssl
 .github/workflows/daily-market-report.yml
 ```
 
-它会每天 UTC 00:00 自动运行，也就是北京时间 08:00。你需要在 GitHub 仓库里配置以下 Secrets：
+它会每天 UTC 00:00 自动运行，也就是北京时间 08:00。当前邮件日报默认使用本地解读，不调用 OpenAI API。你需要在 GitHub 仓库里配置以下 Secrets：
 
-- `OPENAI_API_KEY`：可选，用于 GPT 市场分析
-- `OPENAI_MODEL`：可选 Repository Variable，默认 `gpt-5-mini`
-- `OPENAI_MAX_OUTPUT_TOKENS`：可选 Repository Variable，默认 `1200`
-- `OPENAI_RETRY_ATTEMPTS`：可选 Repository Variable，默认 `3`
 - `GPT_NEWS_LIMIT`：可选 Repository Variable，默认 `12`
 - `REPORT_EMAIL_TO`
 - `SMTP_HOST`

@@ -30,10 +30,7 @@ jobs:
 
       - name: Generate daily market report
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
-          OPENAI_MAX_OUTPUT_TOKENS: ${{ vars.OPENAI_MAX_OUTPUT_TOKENS || '1200' }}
-          OPENAI_RETRY_ATTEMPTS: ${{ vars.OPENAI_RETRY_ATTEMPTS || '3' }}
+          DISABLE_GPT_ANALYSIS: "true"
           GPT_NEWS_LIMIT: ${{ vars.GPT_NEWS_LIMIT || '12' }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}

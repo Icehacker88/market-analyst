@@ -22,11 +22,22 @@ def generate_market_commentary(
     prediction_summary: str,
     news_items: list[NewsItem],
 ) -> tuple[str, str]:
-    prompt = _build_prompt(snapshots, prediction_summary, news_items)
+    if _env_bool("DISABLE_GPT_ANALYSIS", False):
+        return (
+            _fallback_commentary(
+                snapshots,
+                prediction_summary,
+                news_items,
+                intro="日报邮件已设置为不调用 OpenAI API，因此本段使用本地规则生成。",
+            ),
+            "local_fallback_disabled",
+        )
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return _fallback_commentary(snapshots, prediction_summary, news_items), "local_fallback_no_api_key"
 
+    prompt = _build_prompt(snapshots, prediction_summary, news_items)
     model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
     max_output_tokens = _env_int("OPENAI_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
     payload = {
@@ -190,10 +201,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _fallback_commentary(
     snapshots: list[MarketSnapshot],
     prediction_summary: str,
     news_items: list[NewsItem],
+    intro: str = "当前未检测到可用的 OpenAI API Key，因此本段使用本地规则生成。",
 ) -> str:
     lookup = {snapshot.ticker: snapshot for snapshot in snapshots}
     ndx = lookup.get("^NDX")
@@ -216,7 +235,7 @@ def _fallback_commentary(
         [
             "## GPT市场解读",
             "",
-            "当前未检测到可用的 OpenAI API Key，因此本段使用本地规则生成。",
+            intro,
             "",
             "### 市场概况",
             f"最近24小时共抓取到 {news_count} 条相关新闻。整体判断应同时参考指数趋势、VIX 风险偏好和美元兑人民币变化。",
