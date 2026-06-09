@@ -2,7 +2,7 @@ name: Daily Market Report
 
 on:
   schedule:
-    # 08:00 Beijing time is 00:00 UTC.
+    # 08:10 Asia/Kuala_Lumpur time is 00:10 UTC.
     - cron: "10 0 * * *"
   workflow_dispatch:
 
