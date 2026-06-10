@@ -11,6 +11,7 @@ from src.emailer import send_report_email
 from src.email_report import write_html_daily_report
 from src.gpt_analysis import generate_market_commentary
 from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_frame, save_market_snapshot
+from src.models import actionable_signal, classify_signal_quality
 from src.news import NEWS_KEYWORDS, fetch_recent_news, save_news
 from src.pipeline import _run_frame
 
@@ -57,12 +58,16 @@ def run_daily_report(
                     "Forecast_1D_Return": None,
                     "Forecast_1D_Price": None,
                     "Forecast_1D_Direction": None,
+                    "Forecast_1D_Signal": None,
+                    "Signal_Quality": None,
                     "Forecast_5D_Price": None,
                     "Directional_Accuracy": None,
                     "Balanced_Accuracy": None,
                     "Majority_Baseline_Accuracy": None,
                     "Directional_Edge": None,
                     "CV_Directional_Accuracy": None,
+                    "CV_Balanced_Accuracy": None,
+                    "CV_Directional_Edge": None,
                     "MAPE": None,
                     "Error": str(exc),
                 }
@@ -126,6 +131,7 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
     best = metrics.iloc[0]
     first = forecast.iloc[0]
     last = forecast.iloc[-1]
+    quality = classify_signal_quality(best)
     return {
         "Ticker": ticker,
         "Model_Dir": str(model_dir),
@@ -133,12 +139,16 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
         "Forecast_1D_Return": first["Predicted_Return"],
         "Forecast_1D_Price": first["Predicted_Price"],
         "Forecast_1D_Direction": first["Predicted_Direction"],
+        "Forecast_1D_Signal": actionable_signal(first["Predicted_Direction"], quality),
+        "Signal_Quality": quality,
         "Forecast_5D_Price": last["Predicted_Price"],
         "Directional_Accuracy": best["Directional_Accuracy"],
         "Balanced_Accuracy": best["Balanced_Accuracy"],
         "Majority_Baseline_Accuracy": best["Majority_Baseline_Accuracy"],
         "Directional_Edge": best["Directional_Edge"],
         "CV_Directional_Accuracy": best["CV_Directional_Accuracy"],
+        "CV_Balanced_Accuracy": best["CV_Balanced_Accuracy"],
+        "CV_Directional_Edge": best["CV_Directional_Edge"],
         "MAPE": best["MAPE"],
         "Error": "",
     }
@@ -226,7 +236,8 @@ def _asset_section(snapshot: MarketSnapshot | None, predictions: pd.DataFrame) -
     if not pred.empty and not pred.iloc[0].get("Error"):
         row = pred.iloc[0]
         pred_text = (
-            f"最佳模型 {row['Best_Model']}，下一交易日方向 {row['Forecast_1D_Direction']}，"
+            f"最佳模型 {row['Best_Model']}，行动信号 {row['Forecast_1D_Signal']}，"
+            f"原始方向 {row['Forecast_1D_Direction']}，信号质量 {row['Signal_Quality']}，"
             f"预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
             f"5日滚动预测价格 {row['Forecast_5D_Price']:.4f}。"
         )
@@ -263,11 +274,13 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
             lines.append(f"- {row['Ticker']}: 模型运行失败，原因：{row['Error']}")
         else:
             lines.append(
-                f"- {row['Ticker']}: {row['Best_Model']}，1日方向 {row['Forecast_1D_Direction']}，"
+                f"- {row['Ticker']}: {row['Best_Model']}，行动信号 {row['Forecast_1D_Signal']}，"
+                f"原始方向 {row['Forecast_1D_Direction']}，信号质量 {row['Signal_Quality']}，"
                 f"1日预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
                 f"MAPE {_fmt_num(row['MAPE'])}%，测试集方向准确率 {_fmt_num(row['Directional_Accuracy'])}%，"
                 f"多数类基准 {_fmt_num(row['Majority_Baseline_Accuracy'])}%，"
-                f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%"
+                f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%，"
+                f"滚动验证方向优势 {_fmt_num(row['CV_Directional_Edge'])} 个百分点"
             )
     return "\n".join(lines)
 

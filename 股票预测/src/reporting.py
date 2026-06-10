@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.models import optional_model_status
+from src.models import actionable_signal, classify_signal_quality, optional_model_status
 from src.preprocessing import DataQualityReport
 
 
@@ -20,6 +20,8 @@ def write_summary(
     best = metrics.iloc[0]
     latest_forecast = forecast.iloc[0]
     five_day = forecast.iloc[-1]
+    signal_quality = classify_signal_quality(best)
+    signal = actionable_signal(latest_forecast["Predicted_Direction"], signal_quality)
     optional_status = optional_status if optional_status is not None else optional_model_status()
     path = output_dir / "summary.md"
     lines = [
@@ -49,6 +51,8 @@ def write_summary(
         "",
         "## 近期预测",
         "",
+        f"- 行动信号：{signal}",
+        f"- 信号质量：{signal_quality}",
         f"- 下一交易日预测方向：{latest_forecast['Predicted_Direction']}",
         f"- 下一交易日预测收益率：{latest_forecast['Predicted_Return']:.4%}",
         f"- 下一交易日预测价格：{latest_forecast['Predicted_Price']:.4f}",

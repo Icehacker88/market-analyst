@@ -212,13 +212,15 @@ def _render_html(
           <tr>
             <th>资产</th>
             <th>最佳模型</th>
-            <th>1日方向</th>
+            <th>行动信号</th>
+            <th>信号质量</th>
             <th>1日收益率</th>
             <th>5日价格</th>
             <th>MAPE</th>
             <th>测试方向准确率</th>
             <th>多数类基准</th>
             <th>滚动验证准确率</th>
+            <th>滚动验证优势</th>
           </tr>
         </thead>
         <tbody>{prediction_rows}</tbody>
@@ -327,20 +329,22 @@ def _prediction_row(row: pd.Series) -> str:
         return f"""
           <tr>
             <td>{escape(str(row.get("Ticker", "")))}</td>
-            <td colspan="8">{escape(str(row.get("Error")))}</td>
+            <td colspan="10">{escape(str(row.get("Error")))}</td>
           </tr>
         """
     return f"""
       <tr>
         <td>{escape(str(row.get("Ticker", "")))}</td>
         <td>{escape(str(row.get("Best_Model", "")))}</td>
-        <td class="{_direction_class(row.get("Forecast_1D_Direction"))}">{escape(str(row.get("Forecast_1D_Direction", "")))}</td>
+        <td class="{_direction_class(row.get("Forecast_1D_Signal"))}">{escape(str(row.get("Forecast_1D_Signal", "")))}</td>
+        <td>{escape(str(row.get("Signal_Quality", "")))}</td>
         <td class="{_movement_class(row.get("Forecast_1D_Return"))}">{_fmt_pct(row.get("Forecast_1D_Return"))}</td>
         <td>{_fmt_num(row.get("Forecast_5D_Price"))}</td>
         <td>{_fmt_num(row.get("MAPE"))}%</td>
         <td>{_fmt_num(row.get("Directional_Accuracy"))}%</td>
         <td>{_fmt_num(row.get("Majority_Baseline_Accuracy"))}%</td>
         <td>{_fmt_num(row.get("CV_Directional_Accuracy"))}%</td>
+        <td>{_fmt_num(row.get("CV_Directional_Edge"))} pp</td>
       </tr>
     """
 

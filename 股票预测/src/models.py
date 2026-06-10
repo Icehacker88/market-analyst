@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable, Mapping, Protocol
 
 import numpy as np
 import pandas as pd
@@ -219,8 +219,8 @@ def _candidate_factories(
             lambda: DirectionClassifierReturnModel(
                 ExtraTreesClassifier(
                     n_estimators=400,
-                    max_depth=7,
-                    min_samples_leaf=8,
+                    max_depth=5,
+                    min_samples_leaf=5,
                     max_features="sqrt",
                     class_weight="balanced",
                     random_state=42,
@@ -239,7 +239,7 @@ def _cross_validated_direction_metrics(
     x_train: pd.DataFrame,
     y_train: pd.Series,
 ) -> dict[str, float]:
-    splitter = TimeSeriesSplit(n_splits=3)
+    splitter = TimeSeriesSplit(n_splits=3, gap=1)
     accuracies = []
     balanced_accuracies = []
     edges = []
@@ -265,6 +265,30 @@ def _cross_validated_direction_metrics(
         "CV_Balanced_Accuracy": float(np.mean(balanced_accuracies)),
         "CV_Directional_Edge": float(np.mean(edges)),
     }
+
+
+def classify_signal_quality(metrics: Mapping[str, object]) -> str:
+    cv_edge = _metric_float(metrics, "CV_Directional_Edge")
+    cv_balanced = _metric_float(metrics, "CV_Balanced_Accuracy")
+    test_edge = _metric_float(metrics, "Directional_Edge")
+    if cv_edge >= 2 and cv_balanced >= 53 and test_edge > 0:
+        return "High"
+    if cv_edge > 0 and cv_balanced > 50 and test_edge > 0:
+        return "Medium"
+    return "Low"
+
+
+def actionable_signal(direction: object, quality: str) -> str:
+    if quality == "Low":
+        return "Observe"
+    return str(direction)
+
+
+def _metric_float(metrics: Mapping[str, object], key: str) -> float:
+    value = metrics.get(key)
+    if value is None or pd.isna(value):
+        return float("-inf")
+    return float(value)
 
 
 def _rank_metrics(metrics: pd.DataFrame) -> pd.DataFrame:

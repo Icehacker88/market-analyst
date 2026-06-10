@@ -4,7 +4,7 @@ import unittest
 
 import pandas as pd
 
-from src.models import _rank_metrics
+from src.models import _rank_metrics, actionable_signal, classify_signal_quality
 
 
 class RankMetricsTests(unittest.TestCase):
@@ -91,6 +91,32 @@ class RankMetricsTests(unittest.TestCase):
         ranked = _rank_metrics(metrics)
 
         self.assertEqual(ranked.iloc[0]["Model"], "Higher Balanced")
+
+
+class SignalQualityTests(unittest.TestCase):
+    def test_high_quality_signal_requires_validation_and_test_edge(self) -> None:
+        quality = classify_signal_quality(
+            {
+                "CV_Directional_Edge": 2.5,
+                "CV_Balanced_Accuracy": 54.0,
+                "Directional_Edge": 4.0,
+            }
+        )
+
+        self.assertEqual(quality, "High")
+        self.assertEqual(actionable_signal("Down", quality), "Down")
+
+    def test_low_quality_signal_becomes_observe(self) -> None:
+        quality = classify_signal_quality(
+            {
+                "CV_Directional_Edge": -1.0,
+                "CV_Balanced_Accuracy": 51.0,
+                "Directional_Edge": 4.0,
+            }
+        )
+
+        self.assertEqual(quality, "Low")
+        self.assertEqual(actionable_signal("Up", quality), "Observe")
 
 
 if __name__ == "__main__":
