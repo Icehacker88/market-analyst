@@ -17,6 +17,7 @@ from src.models import (
     choose_best_model,
     forecast_future_returns,
     optional_model_status,
+    refit_model_on_all_data,
     train_and_evaluate_models,
 )
 from src.plots import create_all_plots
@@ -107,8 +108,9 @@ def _run_frame(
         include_arima=config.include_arima,
     )
     best_model = choose_best_model(trained_models, metrics)
+    forecast_model = refit_model_on_all_data(best_model, feature_data, feature_columns)
     forecast = forecast_future_returns(
-        model=best_model.model,
+        model=forecast_model,
         cleaned=cleaned,
         feature_columns=feature_columns,
         latest_price=float(cleaned["Price"].iloc[-1]),

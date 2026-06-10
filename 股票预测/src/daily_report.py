@@ -59,6 +59,10 @@ def run_daily_report(
                     "Forecast_1D_Direction": None,
                     "Forecast_5D_Price": None,
                     "Directional_Accuracy": None,
+                    "Balanced_Accuracy": None,
+                    "Majority_Baseline_Accuracy": None,
+                    "Directional_Edge": None,
+                    "CV_Directional_Accuracy": None,
                     "MAPE": None,
                     "Error": str(exc),
                 }
@@ -131,6 +135,10 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
         "Forecast_1D_Direction": first["Predicted_Direction"],
         "Forecast_5D_Price": last["Predicted_Price"],
         "Directional_Accuracy": best["Directional_Accuracy"],
+        "Balanced_Accuracy": best["Balanced_Accuracy"],
+        "Majority_Baseline_Accuracy": best["Majority_Baseline_Accuracy"],
+        "Directional_Edge": best["Directional_Edge"],
+        "CV_Directional_Accuracy": best["CV_Directional_Accuracy"],
         "MAPE": best["MAPE"],
         "Error": "",
     }
@@ -257,7 +265,9 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
             lines.append(
                 f"- {row['Ticker']}: {row['Best_Model']}，1日方向 {row['Forecast_1D_Direction']}，"
                 f"1日预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
-                f"MAPE {_fmt_num(row['MAPE'])}%，方向准确率 {_fmt_num(row['Directional_Accuracy'])}%"
+                f"MAPE {_fmt_num(row['MAPE'])}%，测试集方向准确率 {_fmt_num(row['Directional_Accuracy'])}%，"
+                f"多数类基准 {_fmt_num(row['Majority_Baseline_Accuracy'])}%，"
+                f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%"
             )
     return "\n".join(lines)
 

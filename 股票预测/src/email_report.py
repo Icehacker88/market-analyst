@@ -216,7 +216,9 @@ def _render_html(
             <th>1日收益率</th>
             <th>5日价格</th>
             <th>MAPE</th>
-            <th>方向准确率</th>
+            <th>测试方向准确率</th>
+            <th>多数类基准</th>
+            <th>滚动验证准确率</th>
           </tr>
         </thead>
         <tbody>{prediction_rows}</tbody>
@@ -325,7 +327,7 @@ def _prediction_row(row: pd.Series) -> str:
         return f"""
           <tr>
             <td>{escape(str(row.get("Ticker", "")))}</td>
-            <td colspan="6">{escape(str(row.get("Error")))}</td>
+            <td colspan="8">{escape(str(row.get("Error")))}</td>
           </tr>
         """
     return f"""
@@ -337,6 +339,8 @@ def _prediction_row(row: pd.Series) -> str:
         <td>{_fmt_num(row.get("Forecast_5D_Price"))}</td>
         <td>{_fmt_num(row.get("MAPE"))}%</td>
         <td>{_fmt_num(row.get("Directional_Accuracy"))}%</td>
+        <td>{_fmt_num(row.get("Majority_Baseline_Accuracy"))}%</td>
+        <td>{_fmt_num(row.get("CV_Directional_Accuracy"))}%</td>
       </tr>
     """
 

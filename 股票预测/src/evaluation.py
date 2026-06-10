@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, mean_squared_error, r2_score
 
 
 def evaluate_regression(
@@ -25,10 +25,14 @@ def evaluate_regression(
     r2 = float(r2_score(actual_price, predicted_price))
     return_rmse = float(np.sqrt(mean_squared_error(actual_return, predicted_return)))
     return_mae = float(mean_absolute_error(actual_return, predicted_return))
-    directional_accuracy = float(
-        (np.sign(actual_return.to_numpy()) == np.sign(predicted_return.to_numpy())).mean()
-        * 100
+    actual_direction = actual_return.to_numpy() >= 0
+    predicted_direction = predicted_return.to_numpy() >= 0
+    directional_accuracy = float((actual_direction == predicted_direction).mean() * 100)
+    balanced_accuracy = float(
+        balanced_accuracy_score(actual_direction, predicted_direction) * 100
     )
+    up_rate = float(actual_direction.mean() * 100)
+    majority_baseline_accuracy = max(up_rate, 100 - up_rate)
     return {
         "RMSE": rmse,
         "MAE": mae,
@@ -37,6 +41,9 @@ def evaluate_regression(
         "Return_RMSE": return_rmse,
         "Return_MAE": return_mae,
         "Directional_Accuracy": directional_accuracy,
+        "Balanced_Accuracy": balanced_accuracy,
+        "Majority_Baseline_Accuracy": majority_baseline_accuracy,
+        "Directional_Edge": directional_accuracy - majority_baseline_accuracy,
     }
 
 

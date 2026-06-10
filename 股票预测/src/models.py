@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.arima.model import ARIMA
@@ -74,6 +76,40 @@ class ArimaReturnModel:
             return np.full(steps, self.fallback_return)
 
 
+class DirectionClassifierReturnModel:
+    def __init__(self, classifier: object) -> None:
+        self.classifier = classifier
+        self.return_scale = 0.001
+        self.fallback_probability = 0.5
+
+    def fit(
+        self,
+        x_train: pd.DataFrame,
+        y_train: pd.Series,
+    ) -> "DirectionClassifierReturnModel":
+        returns = pd.Series(y_train).astype(float).dropna()
+        if returns.empty:
+            return self
+        labels = (returns >= 0).astype(int)
+        self.return_scale = max(float(returns.abs().median()), 1e-6)
+        self.fallback_probability = float(labels.mean())
+        if labels.nunique() >= 2:
+            self.classifier.fit(x_train.loc[returns.index], labels)
+        return self
+
+    def predict(self, x: pd.DataFrame) -> np.ndarray:
+        classes = getattr(self.classifier, "classes_", None)
+        if classes is None and hasattr(self.classifier, "named_steps"):
+            classes = getattr(self.classifier.named_steps.get("model"), "classes_", None)
+        if classes is None:
+            probabilities = np.full(len(x), self.fallback_probability)
+        else:
+            probabilities = np.asarray(self.classifier.predict_proba(x), dtype=float)[:, 1]
+        direction = np.where(probabilities >= 0.5, 1.0, -1.0)
+        confidence = np.maximum(np.abs(probabilities - 0.5) * 2, 0.1)
+        return direction * confidence * self.return_scale
+
+
 def split_time_series(
     data: pd.DataFrame,
     feature_columns: list[str],
@@ -100,34 +136,13 @@ def train_and_evaluate_models(
     x_train, x_test, y_train, _ = split_time_series(data, feature_columns, train_ratio)
     test_data = data.loc[x_test.index].copy()
 
-    candidates: list[tuple[str, ReturnModel]] = [
-        ("Baseline", BaselineReturnModel()),
-        (
-            "Linear Regression",
-            Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    ("model", LinearRegression()),
-                ]
-            ),
-        ),
-        (
-            "Random Forest",
-            RandomForestRegressor(
-                n_estimators=300,
-                max_depth=8,
-                min_samples_leaf=5,
-                random_state=42,
-                n_jobs=-1,
-            ),
-        ),
-    ]
-    if include_arima:
-        candidates.append(("ARIMA", ArimaReturnModel()))
+    candidates = _candidate_factories(include_arima)
 
     trained: list[TrainedModel] = []
     metrics_rows: list[dict[str, float | str]] = []
-    for name, model in candidates:
+    for name, factory in candidates:
+        cv_metrics = _cross_validated_direction_metrics(factory, x_train, y_train)
+        model = factory()
         model.fit(x_train, y_train)
         predicted_return = pd.Series(model.predict(x_test), index=x_test.index, dtype=float)
         predictions = build_prediction_frame(
@@ -144,22 +159,134 @@ def train_and_evaluate_models(
             actual_return=predictions["Actual_Return"],
             predicted_return=predictions["Predicted_Return"],
         )
-        metrics_rows.append({"Model": name, **metrics})
+        metrics_rows.append({"Model": name, **cv_metrics, **metrics})
         trained.append(
             TrainedModel(
                 name=name,
                 model=model,
                 predictions=predictions,
-                metrics=metrics,
+                metrics={**cv_metrics, **metrics},
                 feature_importance=_feature_importance(name, model, feature_columns),
             )
         )
 
-    metrics_frame = pd.DataFrame(metrics_rows).sort_values(
+    metrics_frame = _rank_metrics(pd.DataFrame(metrics_rows))
+    return trained, metrics_frame.reset_index(drop=True)
+
+
+def _candidate_factories(
+    include_arima: bool,
+) -> list[tuple[str, Callable[[], ReturnModel]]]:
+    candidates: list[tuple[str, Callable[[], ReturnModel]]] = [
+        ("Baseline", BaselineReturnModel),
+        (
+            "Linear Regression",
+            lambda: Pipeline(
+                [("scaler", StandardScaler()), ("model", LinearRegression())]
+            ),
+        ),
+        (
+            "Random Forest",
+            lambda: RandomForestRegressor(
+                n_estimators=300,
+                max_depth=8,
+                min_samples_leaf=5,
+                random_state=42,
+                n_jobs=-1,
+            ),
+        ),
+        (
+            "Logistic Direction",
+            lambda: DirectionClassifierReturnModel(
+                Pipeline(
+                    [
+                        ("scaler", StandardScaler()),
+                        (
+                            "model",
+                            LogisticRegression(
+                                C=0.05,
+                                class_weight="balanced",
+                                max_iter=3000,
+                                random_state=42,
+                            ),
+                        ),
+                    ]
+                )
+            ),
+        ),
+        (
+            "Extra Trees Direction",
+            lambda: DirectionClassifierReturnModel(
+                ExtraTreesClassifier(
+                    n_estimators=400,
+                    max_depth=7,
+                    min_samples_leaf=8,
+                    max_features="sqrt",
+                    class_weight="balanced",
+                    random_state=42,
+                    n_jobs=-1,
+                )
+            ),
+        ),
+    ]
+    if include_arima:
+        candidates.append(("ARIMA", ArimaReturnModel))
+    return candidates
+
+
+def _cross_validated_direction_metrics(
+    factory: Callable[[], ReturnModel],
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+) -> dict[str, float]:
+    splitter = TimeSeriesSplit(n_splits=3)
+    accuracies = []
+    balanced_accuracies = []
+    edges = []
+    for fold_train, fold_validation in splitter.split(x_train):
+        model = factory()
+        fold_x_train = x_train.iloc[fold_train]
+        fold_y_train = y_train.iloc[fold_train]
+        fold_x_validation = x_train.iloc[fold_validation]
+        actual_direction = y_train.iloc[fold_validation].to_numpy() >= 0
+        model.fit(fold_x_train, fold_y_train)
+        predicted_direction = np.asarray(model.predict(fold_x_validation)) >= 0
+        accuracy = float((actual_direction == predicted_direction).mean() * 100)
+        balanced = float(
+            balanced_accuracy_score(actual_direction, predicted_direction) * 100
+        )
+        up_rate = float(actual_direction.mean() * 100)
+        majority_baseline = max(up_rate, 100 - up_rate)
+        accuracies.append(accuracy)
+        balanced_accuracies.append(balanced)
+        edges.append(accuracy - majority_baseline)
+    return {
+        "CV_Directional_Accuracy": float(np.mean(accuracies)),
+        "CV_Balanced_Accuracy": float(np.mean(balanced_accuracies)),
+        "CV_Directional_Edge": float(np.mean(edges)),
+    }
+
+
+def _rank_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
+    direction_candidates = metrics[metrics["CV_Directional_Edge"] > 0].sort_values(
+        [
+            "CV_Directional_Accuracy",
+            "CV_Directional_Edge",
+            "CV_Balanced_Accuracy",
+            "MAPE",
+        ],
+        ascending=[False, False, False, True],
+    )
+    if direction_candidates.empty:
+        return metrics.sort_values(
+            ["MAPE", "Return_RMSE", "Directional_Accuracy"],
+            ascending=[True, True, False],
+        )
+    remaining = metrics.drop(direction_candidates.index).sort_values(
         ["MAPE", "Return_RMSE", "Directional_Accuracy"],
         ascending=[True, True, False],
     )
-    return trained, metrics_frame.reset_index(drop=True)
+    return pd.concat([direction_candidates, remaining])
 
 
 def choose_best_model(models: list[TrainedModel], metrics: pd.DataFrame) -> TrainedModel:
@@ -168,6 +295,15 @@ def choose_best_model(models: list[TrainedModel], metrics: pd.DataFrame) -> Trai
         if model.name == best_name:
             return model
     return models[0]
+
+
+def refit_model_on_all_data(
+    trained_model: TrainedModel,
+    data: pd.DataFrame,
+    feature_columns: list[str],
+) -> ReturnModel:
+    trained_model.model.fit(data[feature_columns], data["Target_Log_Return"])
+    return trained_model.model
 
 
 def forecast_future_returns(
@@ -284,9 +420,8 @@ def _feature_importance(
     model: ReturnModel,
     feature_columns: list[str],
 ) -> pd.DataFrame | None:
-    if name != "Random Forest":
-        return None
-    importances = getattr(model, "feature_importances_", None)
+    source = model.classifier if isinstance(model, DirectionClassifierReturnModel) else model
+    importances = getattr(source, "feature_importances_", None)
     if importances is None:
         return None
     return (
