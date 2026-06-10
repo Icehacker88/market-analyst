@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         help="日报收件邮箱；也可用环境变量 REPORT_EMAIL_TO，多个邮箱用逗号分隔。",
     )
+    parser.add_argument(
+        "--ledger-path",
+        default="data/history/prediction_ledger.csv",
+        help="每日真实预测账本路径。",
+    )
     return parser.parse_args()
 
 
@@ -81,6 +86,7 @@ def main() -> None:
             include_arima=not args.skip_arima,
             news_hours=args.news_hours,
             email_to=args.email_to,
+            ledger_path=Path(args.ledger_path),
         )
         return
 

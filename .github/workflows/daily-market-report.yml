@@ -10,7 +10,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 concurrency:
   group: daily-market-report
@@ -86,6 +86,20 @@ jobs:
           SMTP_SECURITY: ${{ vars.SMTP_SECURITY || 'auto' }}
         run: |
           python main.py --daily-report --market-start 2024-01-01 --output-dir outputs
+
+      - name: Persist prediction ledger
+        if: steps.dedupe.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history/prediction_ledger.csv
+          if git diff --cached --quiet; then
+            echo "Prediction ledger unchanged."
+            exit 0
+          fi
+          git commit -m "Update prediction ledger"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push
 
       - name: Verify report email was sent
         if: steps.dedupe.outputs.skip != 'true'

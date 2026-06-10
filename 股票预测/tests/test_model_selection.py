@@ -94,12 +94,12 @@ class RankMetricsTests(unittest.TestCase):
 
 
 class SignalQualityTests(unittest.TestCase):
-    def test_high_quality_signal_requires_validation_and_test_edge(self) -> None:
+    def test_high_quality_signal_uses_validation_only(self) -> None:
         quality = classify_signal_quality(
             {
                 "CV_Directional_Edge": 2.5,
                 "CV_Balanced_Accuracy": 54.0,
-                "Directional_Edge": 4.0,
+                "Directional_Edge": -10.0,
             }
         )
 

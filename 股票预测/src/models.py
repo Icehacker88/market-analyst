@@ -270,10 +270,9 @@ def _cross_validated_direction_metrics(
 def classify_signal_quality(metrics: Mapping[str, object]) -> str:
     cv_edge = _metric_float(metrics, "CV_Directional_Edge")
     cv_balanced = _metric_float(metrics, "CV_Balanced_Accuracy")
-    test_edge = _metric_float(metrics, "Directional_Edge")
-    if cv_edge >= 2 and cv_balanced >= 53 and test_edge > 0:
+    if cv_edge >= 2 and cv_balanced >= 53:
         return "High"
-    if cv_edge > 0 and cv_balanced > 50 and test_edge > 0:
+    if cv_edge > 0 and cv_balanced > 50:
         return "Medium"
     return "Low"
 

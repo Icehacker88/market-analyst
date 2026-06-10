@@ -19,6 +19,7 @@ def write_html_daily_report(
     news_items: list[NewsItem],
     commentary: str,
     commentary_source: str,
+    ledger_metrics: pd.DataFrame,
 ) -> tuple[Path, dict[str, Path]]:
     inline_images = _collect_inline_images(report_dir)
     html = _render_html(
@@ -28,6 +29,7 @@ def write_html_daily_report(
         news_items=news_items,
         commentary=commentary,
         commentary_source=commentary_source,
+        ledger_metrics=ledger_metrics,
         inline_images=inline_images,
     )
     path = report_dir / "summary.html"
@@ -42,6 +44,7 @@ def _render_html(
     news_items: list[NewsItem],
     commentary: str,
     commentary_source: str,
+    ledger_metrics: pd.DataFrame,
     inline_images: dict[str, Path],
 ) -> str:
     lookup = {snapshot.ticker: snapshot for snapshot in snapshots}
@@ -51,6 +54,7 @@ def _render_html(
     prediction_rows = "\n".join(_prediction_row(row) for _, row in prediction_frame.iterrows())
     news_html = _news_list(news_items)
     commentary_html = _markdownish_to_html(commentary)
+    ledger_html = _ledger_table(ledger_metrics)
     chart_blocks = "\n".join(
         _chart_block(title, cid) for title, cid in _chart_titles(inline_images)
     )
@@ -221,10 +225,18 @@ def _render_html(
             <th>多数类基准</th>
             <th>滚动验证准确率</th>
             <th>滚动验证优势</th>
+            <th>5日风险</th>
+            <th>高波动概率</th>
+            <th>风险CV AUC</th>
           </tr>
         </thead>
         <tbody>{prediction_rows}</tbody>
       </table>
+    </div>
+
+    <div class="section">
+      <h2>真实预测跟踪</h2>
+      {ledger_html}
     </div>
 
     <div class="section">
@@ -329,7 +341,7 @@ def _prediction_row(row: pd.Series) -> str:
         return f"""
           <tr>
             <td>{escape(str(row.get("Ticker", "")))}</td>
-            <td colspan="10">{escape(str(row.get("Error")))}</td>
+            <td colspan="13">{escape(str(row.get("Error")))}</td>
           </tr>
         """
     return f"""
@@ -345,7 +357,45 @@ def _prediction_row(row: pd.Series) -> str:
         <td>{_fmt_num(row.get("Majority_Baseline_Accuracy"))}%</td>
         <td>{_fmt_num(row.get("CV_Directional_Accuracy"))}%</td>
         <td>{_fmt_num(row.get("CV_Directional_Edge"))} pp</td>
+        <td>{escape(str(row.get("Risk_5D_Status", "")))}</td>
+        <td>{_fmt_pct(row.get("Risk_5D_Probability"))}</td>
+        <td>{_fmt_num(row.get("Risk_5D_CV_AUC"))}</td>
       </tr>
+    """
+
+
+def _ledger_table(metrics: pd.DataFrame) -> str:
+    if metrics.empty:
+        return "<p>暂无真实预测跟踪数据。</p>"
+    rows = []
+    latest = metrics[(metrics["Ticker"] != "ALL") & (metrics["Window"] == "60")]
+    for _, row in latest.iterrows():
+        rows.append(
+            f"""
+              <tr>
+                <td>{escape(str(row.get("Ticker", "")))}</td>
+                <td>{int(row.get("Completed_1D", 0))}</td>
+                <td>{_fmt_num(row.get("Actionable_Accuracy"))}%</td>
+                <td>{_fmt_num(row.get("Actionable_Coverage"))}%</td>
+                <td>{_fmt_num(row.get("Risk_5D_Accuracy"))}%</td>
+              </tr>
+            """
+        )
+    if not rows:
+        return "<p>暂无已完成的真实预测。</p>"
+    return f"""
+      <table>
+        <thead>
+          <tr>
+            <th>资产</th>
+            <th>已完成1日预测</th>
+            <th>行动信号准确率</th>
+            <th>行动覆盖率</th>
+            <th>5日风险准确率</th>
+          </tr>
+        </thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
     """
 
 

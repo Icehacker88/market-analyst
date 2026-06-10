@@ -16,12 +16,14 @@ def write_summary(
     output_dir: Path,
     figure_paths: dict[str, Path],
     optional_status: pd.DataFrame | None = None,
+    risk_forecast: pd.DataFrame | None = None,
 ) -> Path:
     best = metrics.iloc[0]
     latest_forecast = forecast.iloc[0]
     five_day = forecast.iloc[-1]
     signal_quality = classify_signal_quality(best)
     signal = actionable_signal(latest_forecast["Predicted_Direction"], signal_quality)
+    risk = risk_forecast.iloc[0] if risk_forecast is not None and not risk_forecast.empty else None
     optional_status = optional_status if optional_status is not None else optional_model_status()
     path = output_dir / "summary.md"
     lines = [
@@ -57,6 +59,17 @@ def write_summary(
         f"- 下一交易日预测收益率：{latest_forecast['Predicted_Return']:.4%}",
         f"- 下一交易日预测价格：{latest_forecast['Predicted_Price']:.4f}",
         f"- 第 5 个交易日滚动预测价格：{five_day['Predicted_Price']:.4f}",
+        "",
+        "## 未来 5 日风险状态",
+        "",
+        (
+            f"- 风险状态：{risk['Risk_5D_Status']}\n"
+            f"- 高波动概率：{risk['Risk_5D_Probability']:.2%}\n"
+            f"- 风险模型：{risk['Risk_5D_Model']}\n"
+            f"- 滚动验证 AUC：{risk['Risk_5D_CV_AUC']:.3f}"
+            if risk is not None
+            else "- 风险模型暂不可用。"
+        ),
         "",
         "## 可选组件状态",
         "",

@@ -23,6 +23,7 @@ from src.models import (
 from src.plots import create_all_plots
 from src.preprocessing import clean_price_data
 from src.reporting import write_run_metadata, write_summary
+from src.risk_model import train_and_forecast_risk
 
 
 def run_single(
@@ -129,6 +130,16 @@ def _run_frame(
     best_model.predictions.to_csv(output_dir / "best_model_predictions.csv", index=False)
     metrics.to_csv(output_dir / "model_comparison.csv", index=False)
     forecast.to_csv(output_dir / "forecast_1d_5d.csv", index=False)
+    risk_forecast = None
+    try:
+        risk_comparison, risk_forecast = train_and_forecast_risk(
+            cleaned,
+            train_ratio=config.train_ratio,
+        )
+        risk_comparison.to_csv(output_dir / "risk_model_comparison.csv", index=False)
+        risk_forecast.to_csv(output_dir / "risk_forecast_5d.csv", index=False)
+    except Exception as exc:
+        (output_dir / "risk_model_error.txt").write_text(str(exc) + "\n", encoding="utf-8")
     optional_status = optional_model_status()
     optional_status.to_csv(output_dir / "optional_components.csv", index=False)
     if random_forest_importance is not None:
@@ -149,6 +160,7 @@ def _run_frame(
         output_dir=output_dir,
         figure_paths=figure_paths,
         optional_status=optional_status,
+        risk_forecast=risk_forecast,
     )
     write_run_metadata(
         output_dir=output_dir,

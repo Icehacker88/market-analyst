@@ -14,6 +14,7 @@ from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_fra
 from src.models import actionable_signal, classify_signal_quality
 from src.news import NEWS_KEYWORDS, fetch_recent_news, save_news
 from src.pipeline import _run_frame
+from src.prediction_ledger import update_prediction_ledger
 
 
 def run_daily_report(
@@ -25,6 +26,7 @@ def run_daily_report(
     include_arima: bool = True,
     news_hours: int = 24,
     email_to: list[str] | None = None,
+    ledger_path: Path | None = None,
 ) -> Path:
     beijing_now = datetime.now(ZoneInfo("Asia/Shanghai"))
     report_dir = output_root / "daily_reports" / beijing_now.strftime("%Y%m%d_%H%M%S")
@@ -32,9 +34,11 @@ def run_daily_report(
     report_dir.mkdir(parents=True, exist_ok=True)
 
     snapshots: list[MarketSnapshot] = []
+    market_frames: dict[str, pd.DataFrame] = {}
     model_rows = []
     for ticker in MARKET_ASSETS:
         raw = download_yahoo_chart(ticker=ticker, start=market_start, end=end)
+        market_frames[ticker] = raw
         snapshot, technical = analyze_market_frame(ticker, raw)
         snapshots.append(snapshot)
         technical.to_csv(report_dir / f"technical_{_safe_name(ticker)}.csv", index=False)
@@ -68,6 +72,12 @@ def run_daily_report(
                     "CV_Directional_Accuracy": None,
                     "CV_Balanced_Accuracy": None,
                     "CV_Directional_Edge": None,
+                    "Risk_5D_Model": None,
+                    "Risk_5D_Probability": None,
+                    "Risk_5D_Status": None,
+                    "Risk_5D_Threshold_Daily_Vol": None,
+                    "Risk_5D_CV_AUC": None,
+                    "Risk_5D_Test_AUC": None,
                     "MAPE": None,
                     "Error": str(exc),
                 }
@@ -80,6 +90,17 @@ def run_daily_report(
     prediction_frame = pd.DataFrame(model_rows)
     prediction_path = report_dir / "daily_model_predictions.csv"
     prediction_frame.to_csv(prediction_path, index=False)
+    ledger_path = ledger_path or Path("data/history/prediction_ledger.csv")
+    ledger, ledger_metrics = update_prediction_ledger(
+        ledger_path=ledger_path,
+        prediction_frame=prediction_frame,
+        market_frames=market_frames,
+        generated_at=beijing_now,
+    )
+    ledger_snapshot_path = report_dir / "prediction_ledger_snapshot.csv"
+    ledger_metrics_path = report_dir / "prediction_ledger_metrics.csv"
+    ledger.to_csv(ledger_snapshot_path, index=False)
+    ledger_metrics.to_csv(ledger_metrics_path, index=False)
     prediction_summary = _prediction_summary_text(prediction_frame)
 
     commentary, commentary_source = generate_market_commentary(
@@ -101,7 +122,10 @@ def run_daily_report(
             "news_csv": news_csv,
             "news_md": news_md,
             "prediction_csv": prediction_path,
+            "ledger_snapshot": ledger_snapshot_path,
+            "ledger_metrics": ledger_metrics_path,
         },
+        ledger_metrics=ledger_metrics,
     )
     html_path, inline_images = write_html_daily_report(
         report_dir=report_dir,
@@ -111,6 +135,7 @@ def run_daily_report(
         news_items=news_items,
         commentary=commentary,
         commentary_source=commentary_source,
+        ledger_metrics=ledger_metrics,
     )
     _, message = send_report_email(
         report_path=summary_path,
@@ -132,7 +157,7 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
     first = forecast.iloc[0]
     last = forecast.iloc[-1]
     quality = classify_signal_quality(best)
-    return {
+    result = {
         "Ticker": ticker,
         "Model_Dir": str(model_dir),
         "Best_Model": best["Model"],
@@ -152,6 +177,12 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
         "MAPE": best["MAPE"],
         "Error": "",
     }
+    risk_path = model_dir / "risk_forecast_5d.csv"
+    if risk_path.exists():
+        risk = pd.read_csv(risk_path).iloc[0]
+        for column in risk.index:
+            result[column] = risk[column]
+    return result
 
 
 def _write_investment_daily(
@@ -163,6 +194,7 @@ def _write_investment_daily(
     commentary: str,
     commentary_source: str,
     artifact_paths: dict[str, Path],
+    ledger_metrics: pd.DataFrame,
 ) -> Path:
     lookup = {snapshot.ticker: snapshot for snapshot in snapshots}
     lines = [
@@ -190,7 +222,11 @@ def _write_investment_daily(
         "",
         "## 风险分析",
         "",
-        _risk_section(lookup),
+        _risk_section(lookup, prediction_frame),
+        "",
+        "## 真实预测跟踪",
+        "",
+        _ledger_summary(ledger_metrics),
         "",
         "## GPT市场分析",
         "",
@@ -239,7 +275,9 @@ def _asset_section(snapshot: MarketSnapshot | None, predictions: pd.DataFrame) -
             f"最佳模型 {row['Best_Model']}，行动信号 {row['Forecast_1D_Signal']}，"
             f"原始方向 {row['Forecast_1D_Direction']}，信号质量 {row['Signal_Quality']}，"
             f"预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
-            f"5日滚动预测价格 {row['Forecast_5D_Price']:.4f}。"
+            f"5日滚动预测价格 {row['Forecast_5D_Price']:.4f}；"
+            f"未来5日风险 {row.get('Risk_5D_Status', 'N/A')}，"
+            f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}。"
         )
     return (
         f"{snapshot.name} 最新价格 {snapshot.latest_price:.4f}，"
@@ -249,7 +287,10 @@ def _asset_section(snapshot: MarketSnapshot | None, predictions: pd.DataFrame) -
     )
 
 
-def _risk_section(lookup: dict[str, MarketSnapshot]) -> str:
+def _risk_section(
+    lookup: dict[str, MarketSnapshot],
+    predictions: pd.DataFrame,
+) -> str:
     vix = lookup.get("^VIX")
     usdcny = lookup.get("USDCNY=X")
     lines = []
@@ -261,6 +302,16 @@ def _risk_section(lookup: dict[str, MarketSnapshot]) -> str:
         )
     if not lines:
         return "风险数据暂不可用。"
+    for ticker in ["SPY", "QQQ", "^VIX", "USDCNY=X"]:
+        pred = predictions[predictions["Ticker"] == ticker]
+        if pred.empty or pred.iloc[0].get("Error"):
+            continue
+        row = pred.iloc[0]
+        lines.append(
+            f"- {ticker} 未来5日风险：{row.get('Risk_5D_Status', 'N/A')}，"
+            f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}，"
+            f"滚动验证 AUC {_fmt_num(row.get('Risk_5D_CV_AUC'))}。"
+        )
     lines.append("- 若 VIX 快速上行或美元兑人民币明显走强，应降低对高 beta 科技股的短线预期。")
     return "\n".join(lines)
 
@@ -280,9 +331,26 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
                 f"MAPE {_fmt_num(row['MAPE'])}%，测试集方向准确率 {_fmt_num(row['Directional_Accuracy'])}%，"
                 f"多数类基准 {_fmt_num(row['Majority_Baseline_Accuracy'])}%，"
                 f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%，"
-                f"滚动验证方向优势 {_fmt_num(row['CV_Directional_Edge'])} 个百分点"
+                f"滚动验证方向优势 {_fmt_num(row['CV_Directional_Edge'])} 个百分点，"
+                f"未来5日风险 {row.get('Risk_5D_Status', 'N/A')}，"
+                f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}"
             )
     return "\n".join(lines)
+
+
+def _ledger_summary(metrics: pd.DataFrame) -> str:
+    if metrics.empty:
+        return "暂无真实预测跟踪数据。"
+    latest = metrics[(metrics["Ticker"] != "ALL") & (metrics["Window"] == "60")]
+    lines = []
+    for _, row in latest.iterrows():
+        lines.append(
+            f"- {row['Ticker']}：已完成1日预测 {int(row['Completed_1D'])} 条，"
+            f"行动信号准确率 {_fmt_num(row['Actionable_Accuracy'])}%，"
+            f"行动覆盖率 {_fmt_num(row['Actionable_Coverage'])}%，"
+            f"5日风险准确率 {_fmt_num(row['Risk_5D_Accuracy'])}%。"
+        )
+    return "\n".join(lines) if lines else "暂无已完成的真实预测。"
 
 
 def _safe_name(ticker: str) -> str:
