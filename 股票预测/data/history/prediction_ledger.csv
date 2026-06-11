@@ -1,1 +1,6 @@
 Created_At,As_Of_Date,Ticker,Best_Model,Raw_Direction,Action_Signal,Signal_Quality,Forecast_1D_Return,Risk_5D_Model,Risk_5D_Probability,Risk_5D_Status,Risk_5D_Threshold_Daily_Vol,Actual_1D_Date,Actual_1D_Return,Actual_1D_Direction,Raw_Direction_Correct,Action_Signal_Correct,Actual_5D_Date,Actual_5D_Realized_Vol,Actual_5D_High_Risk,Risk_5D_Correct
+2026-06-11T10:12:28.899723+08:00,2026-06-10,QQQ,ARIMA,Up,Up,Medium,0.0006593521579789,Extra Trees Risk,0.7662719760083783,High,0.0152254936334826,,,,,,,,,
+2026-06-11T10:12:28.899723+08:00,2026-06-10,SPY,ARIMA,Up,Observe,Low,0.0019020734487935,Logistic Risk,0.9083644166996888,High,0.0088734972100115,,,,,,,,,
+2026-06-11T10:12:28.899723+08:00,2026-06-10,^NDX,ARIMA,Up,Observe,Low,0.000125116801185,Extra Trees Risk,0.7372282719383392,High,0.0151768051825111,,,,,,,,,
+2026-06-11T10:12:28.899723+08:00,2026-06-10,^VIX,Extra Trees Direction,Down,Down,High,-0.0122388152183949,Logistic Risk,0.7364238874106884,High,0.0915635988481483,,,,,,,,,
+2026-06-11T10:12:28.899723+08:00,2026-06-11,USDCNY=X,Logistic Direction,Down,Observe,Low,-0.0001905609593045,Logistic Risk,0.5120201962699527,Elevated,0.0013782630064225,,,,,,,,,
