@@ -46,6 +46,21 @@ TEXT_COLUMNS = [
     "Actual_1D_Direction",
     "Actual_5D_Date",
 ]
+VALIDATION_COLUMNS = [
+    "Prediction_Date",
+    "Actual_Date",
+    "Ticker",
+    "Best_Model",
+    "Forecast_Return",
+    "Actual_Return",
+    "Return_Error",
+    "Absolute_Return_Error",
+    "Forecast_Direction",
+    "Actual_Direction",
+    "Direction_Correct",
+    "Action_Signal",
+    "Action_Signal_Correct",
+]
 
 
 def update_prediction_ledger(
@@ -94,6 +109,7 @@ def build_ledger_metrics(ledger: pd.DataFrame) -> pd.DataFrame:
             direction = sample.dropna(subset=["Raw_Direction_Correct"])
             actionable = sample.dropna(subset=["Action_Signal_Correct"])
             risk = sample.dropna(subset=["Risk_5D_Correct"])
+            return_errors = _return_errors(direction)
             rows.append(
                 {
                     "Ticker": ticker,
@@ -101,6 +117,14 @@ def build_ledger_metrics(ledger: pd.DataFrame) -> pd.DataFrame:
                     "Completed_1D": len(direction),
                     "Raw_Direction_Accuracy": _mean_percent(
                         direction["Raw_Direction_Correct"]
+                    ),
+                    "Mean_Absolute_Return_Error": (
+                        float(return_errors.abs().mean())
+                        if len(return_errors)
+                        else np.nan
+                    ),
+                    "Mean_Return_Error": (
+                        float(return_errors.mean()) if len(return_errors) else np.nan
                     ),
                     "Actionable_1D": len(actionable),
                     "Actionable_Accuracy": _mean_percent(
@@ -116,6 +140,42 @@ def build_ledger_metrics(ledger: pd.DataFrame) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
+
+
+def build_latest_1d_validation(ledger: pd.DataFrame) -> pd.DataFrame:
+    completed = ledger.dropna(
+        subset=["Actual_1D_Date", "Actual_1D_Return", "Forecast_1D_Return"]
+    ).copy()
+    if completed.empty:
+        return pd.DataFrame(columns=VALIDATION_COLUMNS)
+    completed["Actual_1D_Date"] = completed["Actual_1D_Date"].astype(str)
+    latest = (
+        completed.sort_values(["Ticker", "Actual_1D_Date", "As_Of_Date"])
+        .groupby("Ticker", sort=True, as_index=False)
+        .tail(1)
+        .sort_values("Ticker")
+    )
+    forecast_return = pd.to_numeric(latest["Forecast_1D_Return"], errors="coerce")
+    actual_return = pd.to_numeric(latest["Actual_1D_Return"], errors="coerce")
+    return_error = actual_return - forecast_return
+    validation = pd.DataFrame(
+        {
+            "Prediction_Date": latest["As_Of_Date"].values,
+            "Actual_Date": latest["Actual_1D_Date"].values,
+            "Ticker": latest["Ticker"].values,
+            "Best_Model": latest["Best_Model"].values,
+            "Forecast_Return": forecast_return.values,
+            "Actual_Return": actual_return.values,
+            "Return_Error": return_error.values,
+            "Absolute_Return_Error": return_error.abs().values,
+            "Forecast_Direction": latest["Raw_Direction"].values,
+            "Actual_Direction": latest["Actual_1D_Direction"].values,
+            "Direction_Correct": latest["Raw_Direction_Correct"].values,
+            "Action_Signal": latest["Action_Signal"].values,
+            "Action_Signal_Correct": latest["Action_Signal_Correct"].values,
+        }
+    )
+    return validation.reindex(columns=VALIDATION_COLUMNS).reset_index(drop=True)
 
 
 def _load_ledger(path: Path) -> pd.DataFrame:
@@ -210,6 +270,12 @@ def _new_ledger_row(
 
 def _mean_percent(series: pd.Series) -> float:
     return float(series.astype(float).mean() * 100) if len(series) else np.nan
+
+
+def _return_errors(frame: pd.DataFrame) -> pd.Series:
+    forecast = pd.to_numeric(frame["Forecast_1D_Return"], errors="coerce")
+    actual = pd.to_numeric(frame["Actual_1D_Return"], errors="coerce")
+    return (actual - forecast).dropna()
 
 
 def _to_float(value: object) -> float | None:

@@ -143,6 +143,7 @@ outputs/SPY/20260608_101530/
 - `daily_model_predictions.csv`：市场资产模型预测汇总
 - `prediction_ledger_snapshot.csv`：截至本次运行的真实预测账本快照
 - `prediction_ledger_metrics.csv`：最近 20、60、120 日和全部历史的真实预测表现
+- `latest_prediction_validation.csv`：各资产最新一笔已完成的“预测收益 vs 实际收益”验证结果
 - `email_status.txt`：邮件发送状态
 
 ## 模型说明
@@ -164,7 +165,7 @@ outputs/SPY/20260608_101530/
 
 日报和邮件会为每个资产统一展示“预计明日上涨/下降 X%；预计未来五日上涨/下降 X%”。
 
-`data/history/prediction_ledger.csv` 会冻结每天首次生成的预测，并在后续交易日自动补齐真实 1 日方向和 5 日风险结果。GitHub Actions 每日运行后只持久化该账本，不提交日报输出文件。
+`data/history/prediction_ledger.csv` 会冻结每天首次生成的预测，并在后续交易日自动补齐真实 1 日方向和 5 日风险结果。日报和邮件会展示各资产上一笔已完成预测的预测收益、实际收益、收益误差、方向验证，以及最近 60 次真实方向准确率和平均绝对收益误差。GitHub Actions 每日运行后只持久化该账本，不提交日报输出文件。
 
 ## GPT 市场分析配置
 

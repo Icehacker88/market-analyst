@@ -21,6 +21,7 @@ def write_html_daily_report(
     commentary: str,
     commentary_source: str,
     ledger_metrics: pd.DataFrame,
+    latest_validation: pd.DataFrame,
 ) -> tuple[Path, dict[str, Path]]:
     inline_images = _collect_inline_images(report_dir)
     html = _render_html(
@@ -31,6 +32,7 @@ def write_html_daily_report(
         commentary=commentary,
         commentary_source=commentary_source,
         ledger_metrics=ledger_metrics,
+        latest_validation=latest_validation,
         inline_images=inline_images,
     )
     path = report_dir / "summary.html"
@@ -46,6 +48,7 @@ def _render_html(
     commentary: str,
     commentary_source: str,
     ledger_metrics: pd.DataFrame,
+    latest_validation: pd.DataFrame,
     inline_images: dict[str, Path],
 ) -> str:
     lookup = {snapshot.ticker: snapshot for snapshot in snapshots}
@@ -56,6 +59,7 @@ def _render_html(
     news_html = _news_list(news_items)
     commentary_html = _markdownish_to_html(commentary)
     ledger_html = _ledger_table(ledger_metrics)
+    validation_html = _validation_table(latest_validation)
     chart_blocks = "\n".join(
         _chart_block(title, cid) for title, cid in _chart_titles(inline_images)
     )
@@ -238,6 +242,9 @@ def _render_html(
 
     <div class="section">
       <h2>真实预测跟踪</h2>
+      <h3>昨日预测与今日实际</h3>
+      {validation_html}
+      <h3>历史真实准确度</h3>
       {ledger_html}
     </div>
 
@@ -378,8 +385,10 @@ def _ledger_table(metrics: pd.DataFrame) -> str:
               <tr>
                 <td>{escape(str(row.get("Ticker", "")))}</td>
                 <td>{int(row.get("Completed_1D", 0))}</td>
+                <td>{_fmt_num(row.get("Raw_Direction_Accuracy"))}%</td>
                 <td>{_fmt_num(row.get("Actionable_Accuracy"))}%</td>
                 <td>{_fmt_num(row.get("Actionable_Coverage"))}%</td>
+                <td>{_fmt_pct(row.get("Mean_Absolute_Return_Error"))}</td>
                 <td>{_fmt_num(row.get("Risk_5D_Accuracy"))}%</td>
               </tr>
             """
@@ -392,9 +401,58 @@ def _ledger_table(metrics: pd.DataFrame) -> str:
           <tr>
             <th>资产</th>
             <th>已完成1日预测</th>
+            <th>原始方向准确率</th>
             <th>行动信号准确率</th>
             <th>行动覆盖率</th>
+            <th>平均绝对收益误差</th>
             <th>5日风险准确率</th>
+          </tr>
+        </thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    """
+
+
+def _validation_table(validation: pd.DataFrame) -> str:
+    if validation.empty:
+        return "<p>暂无可验证的上一交易日预测；将在获得下一交易日实际收盘数据后自动补齐。</p>"
+    rows = []
+    for _, row in validation.iterrows():
+        rows.append(
+            f"""
+              <tr>
+                <td>{escape(str(row.get("Ticker", "")))}</td>
+                <td>{escape(str(row.get("Prediction_Date", "")))} → {escape(str(row.get("Actual_Date", "")))}</td>
+                <td class="{_movement_class(row.get("Forecast_Return"))}">{_fmt_signed_pct(row.get("Forecast_Return"))}</td>
+                <td class="{_movement_class(row.get("Actual_Return"))}">{_fmt_signed_pct(row.get("Actual_Return"))}</td>
+                <td>{_fmt_signed_pct(row.get("Return_Error"))}</td>
+                <td>{_fmt_pct(row.get("Absolute_Return_Error"))}</td>
+                <td>{escape(str(row.get("Forecast_Direction", "")))} → {escape(str(row.get("Actual_Direction", "")))}</td>
+                <td class="{_correct_class(row.get("Direction_Correct"))}">{_correct_text(row.get("Direction_Correct"))}</td>
+              </tr>
+            """
+        )
+    correct = pd.to_numeric(validation["Direction_Correct"], errors="coerce").dropna()
+    errors = pd.to_numeric(validation["Absolute_Return_Error"], errors="coerce").dropna()
+    summary = ""
+    if len(correct):
+        summary = (
+            f"<p><strong>本次验证：</strong>{len(correct)} 支，方向准确率 "
+            f"{correct.mean():.2%}，平均绝对收益误差 {errors.mean():.2%}。</p>"
+        )
+    return f"""
+      {summary}
+      <table>
+        <thead>
+          <tr>
+            <th>资产</th>
+            <th>预测日 → 实际日</th>
+            <th>预测收益</th>
+            <th>实际收益</th>
+            <th>差异</th>
+            <th>绝对误差</th>
+            <th>预测方向 → 实际方向</th>
+            <th>方向验证</th>
           </tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
@@ -471,6 +529,25 @@ def _fmt_pct(value: object) -> str:
 def _fmt_num(value: object) -> str:
     numeric = _to_float(value)
     return "N/A" if numeric is None else f"{numeric:.2f}"
+
+
+def _fmt_signed_pct(value: object) -> str:
+    numeric = _to_float(value)
+    return "N/A" if numeric is None else f"{numeric:+.2%}"
+
+
+def _correct_text(value: object) -> str:
+    numeric = _to_float(value)
+    if numeric is None:
+        return "暂不可用"
+    return "正确" if bool(numeric) else "错误"
+
+
+def _correct_class(value: object) -> str:
+    numeric = _to_float(value)
+    if numeric is None:
+        return "neutral"
+    return "up" if bool(numeric) else "down"
 
 
 def _to_float(value: object) -> float | None:

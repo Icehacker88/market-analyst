@@ -15,7 +15,7 @@ from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_fra
 from src.models import actionable_signal, classify_signal_quality
 from src.news import NEWS_KEYWORDS, fetch_recent_news, save_news
 from src.pipeline import _run_frame
-from src.prediction_ledger import update_prediction_ledger
+from src.prediction_ledger import build_latest_1d_validation, update_prediction_ledger
 
 
 def run_daily_report(
@@ -102,9 +102,16 @@ def run_daily_report(
     )
     ledger_snapshot_path = report_dir / "prediction_ledger_snapshot.csv"
     ledger_metrics_path = report_dir / "prediction_ledger_metrics.csv"
+    validation_path = report_dir / "latest_prediction_validation.csv"
     ledger.to_csv(ledger_snapshot_path, index=False)
     ledger_metrics.to_csv(ledger_metrics_path, index=False)
-    prediction_summary = _prediction_summary_text(prediction_frame)
+    latest_validation = build_latest_1d_validation(ledger)
+    latest_validation.to_csv(validation_path, index=False)
+    prediction_summary = (
+        _prediction_summary_text(prediction_frame)
+        + "\n\n昨日预测验证：\n"
+        + _validation_summary(latest_validation)
+    )
 
     commentary, commentary_source = generate_market_commentary(
         snapshots=snapshots,
@@ -127,8 +134,10 @@ def run_daily_report(
             "prediction_csv": prediction_path,
             "ledger_snapshot": ledger_snapshot_path,
             "ledger_metrics": ledger_metrics_path,
+            "latest_validation": validation_path,
         },
         ledger_metrics=ledger_metrics,
+        latest_validation=latest_validation,
     )
     html_path, inline_images = write_html_daily_report(
         report_dir=report_dir,
@@ -139,6 +148,7 @@ def run_daily_report(
         commentary=commentary,
         commentary_source=commentary_source,
         ledger_metrics=ledger_metrics,
+        latest_validation=latest_validation,
     )
     _, message = send_report_email(
         report_path=summary_path,
@@ -202,6 +212,7 @@ def _write_investment_daily(
     commentary_source: str,
     artifact_paths: dict[str, Path],
     ledger_metrics: pd.DataFrame,
+    latest_validation: pd.DataFrame,
 ) -> Path:
     lookup = {snapshot.ticker: snapshot for snapshot in snapshots}
     lines = [
@@ -236,6 +247,12 @@ def _write_investment_daily(
         _risk_section(lookup, prediction_frame),
         "",
         "## 真实预测跟踪",
+        "",
+        "### 昨日预测与今日实际",
+        "",
+        _validation_summary(latest_validation),
+        "",
+        "### 历史真实准确度",
         "",
         _ledger_summary(ledger_metrics),
         "",
@@ -367,11 +384,35 @@ def _ledger_summary(metrics: pd.DataFrame) -> str:
     for _, row in latest.iterrows():
         lines.append(
             f"- {row['Ticker']}：已完成1日预测 {int(row['Completed_1D'])} 条，"
+            f"原始方向准确率 {_fmt_num(row['Raw_Direction_Accuracy'])}%，"
             f"行动信号准确率 {_fmt_num(row['Actionable_Accuracy'])}%，"
             f"行动覆盖率 {_fmt_num(row['Actionable_Coverage'])}%，"
+            f"平均绝对收益误差 {_fmt_pct(row['Mean_Absolute_Return_Error'])}，"
             f"5日风险准确率 {_fmt_num(row['Risk_5D_Accuracy'])}%。"
         )
     return "\n".join(lines) if lines else "暂无已完成的真实预测。"
+
+
+def _validation_summary(validation: pd.DataFrame) -> str:
+    if validation.empty:
+        return "暂无可验证的上一交易日预测；将在获得下一交易日实际收盘数据后自动补齐。"
+    lines = []
+    for _, row in validation.iterrows():
+        lines.append(
+            f"- {row['Ticker']}（预测日 {row['Prediction_Date']}，实际日 {row['Actual_Date']}）："
+            f"预计 {_fmt_signed_pct(row['Forecast_Return'])}，实际 {_fmt_signed_pct(row['Actual_Return'])}，"
+            f"差异 {_fmt_signed_pct(row['Return_Error'])}，绝对误差 {_fmt_pct(row['Absolute_Return_Error'])}；"
+            f"预计方向 {row['Forecast_Direction']}，实际方向 {row['Actual_Direction']}，"
+            f"方向验证{_correct_text(row['Direction_Correct'])}。"
+        )
+    correct = pd.to_numeric(validation["Direction_Correct"], errors="coerce").dropna()
+    errors = pd.to_numeric(validation["Absolute_Return_Error"], errors="coerce").dropna()
+    if len(correct):
+        lines.append(
+            f"- 本次共验证 {len(correct)} 支，方向准确率 {correct.mean():.2%}，"
+            f"平均绝对收益误差 {errors.mean():.2%}。"
+        )
+    return "\n".join(lines)
 
 
 def _safe_name(ticker: str) -> str:
@@ -388,3 +429,15 @@ def _fmt_num(value: object) -> str:
     if value is None or pd.isna(value):
         return "N/A"
     return f"{float(value):.2f}"
+
+
+def _fmt_signed_pct(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):+.2%}"
+
+
+def _correct_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "暂不可用"
+    return "正确" if bool(float(value)) else "错误"
