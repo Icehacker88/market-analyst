@@ -9,6 +9,7 @@ import pandas as pd
 from src.data_loader import download_yahoo_chart
 from src.emailer import send_report_email
 from src.email_report import write_html_daily_report
+from src.forecast_text import forecast_sentence
 from src.gpt_analysis import generate_market_commentary
 from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_frame, save_market_snapshot
 from src.models import actionable_signal, classify_signal_quality
@@ -65,6 +66,8 @@ def run_daily_report(
                     "Forecast_1D_Signal": None,
                     "Signal_Quality": None,
                     "Forecast_5D_Price": None,
+                    "Forecast_5D_Return": None,
+                    "Forecast_5D_Direction": None,
                     "Directional_Accuracy": None,
                     "Balanced_Accuracy": None,
                     "Majority_Baseline_Accuracy": None,
@@ -156,6 +159,8 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
     best = metrics.iloc[0]
     first = forecast.iloc[0]
     last = forecast.iloc[-1]
+    latest_price = float(pd.read_csv(model_dir / "cleaned_prices.csv")["Price"].iloc[-1])
+    five_day_return = float(last["Predicted_Price"]) / latest_price - 1
     quality = classify_signal_quality(best)
     result = {
         "Ticker": ticker,
@@ -167,6 +172,8 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
         "Forecast_1D_Signal": actionable_signal(first["Predicted_Direction"], quality),
         "Signal_Quality": quality,
         "Forecast_5D_Price": last["Predicted_Price"],
+        "Forecast_5D_Return": five_day_return,
+        "Forecast_5D_Direction": "Up" if five_day_return >= 0 else "Down",
         "Directional_Accuracy": best["Directional_Accuracy"],
         "Balanced_Accuracy": best["Balanced_Accuracy"],
         "Majority_Baseline_Accuracy": best["Majority_Baseline_Accuracy"],
@@ -219,6 +226,10 @@ def _write_investment_daily(
         "## QQQ分析",
         "",
         _asset_section(lookup.get("QQQ"), prediction_frame),
+        "",
+        "## 逐项预测",
+        "",
+        _all_asset_forecasts(prediction_frame),
         "",
         "## 风险分析",
         "",
@@ -274,7 +285,7 @@ def _asset_section(snapshot: MarketSnapshot | None, predictions: pd.DataFrame) -
         pred_text = (
             f"最佳模型 {row['Best_Model']}，行动信号 {row['Forecast_1D_Signal']}，"
             f"原始方向 {row['Forecast_1D_Direction']}，信号质量 {row['Signal_Quality']}，"
-            f"预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
+            f"{forecast_sentence(row)}"
             f"5日滚动预测价格 {row['Forecast_5D_Price']:.4f}；"
             f"未来5日风险 {row.get('Risk_5D_Status', 'N/A')}，"
             f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}。"
@@ -327,7 +338,7 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
             lines.append(
                 f"- {row['Ticker']}: {row['Best_Model']}，行动信号 {row['Forecast_1D_Signal']}，"
                 f"原始方向 {row['Forecast_1D_Direction']}，信号质量 {row['Signal_Quality']}，"
-                f"1日预测收益率 {_fmt_pct(row['Forecast_1D_Return'])}，"
+                f"{forecast_sentence(row)}"
                 f"MAPE {_fmt_num(row['MAPE'])}%，测试集方向准确率 {_fmt_num(row['Directional_Accuracy'])}%，"
                 f"多数类基准 {_fmt_num(row['Majority_Baseline_Accuracy'])}%，"
                 f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%，"
@@ -336,6 +347,16 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
                 f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}"
             )
     return "\n".join(lines)
+
+
+def _all_asset_forecasts(frame: pd.DataFrame) -> str:
+    lines = []
+    for _, row in frame.iterrows():
+        if row.get("Error"):
+            lines.append(f"- {row['Ticker']}：预测暂不可用。")
+        else:
+            lines.append(f"- {row['Ticker']}：{forecast_sentence(row)}")
+    return "\n".join(lines) if lines else "预测暂不可用。"
 
 
 def _ledger_summary(metrics: pd.DataFrame) -> str:

@@ -2,10 +2,11 @@ name: Daily Market Report
 
 on:
   schedule:
-    # Staggered retries at 08:10, 08:25, and 08:40 Asia/Kuala_Lumpur.
+    # Staggered retries at 08:10, 08:25, 08:40, and 08:55 Asia/Kuala_Lumpur.
     - cron: "10 0 * * *"
     - cron: "25 0 * * *"
     - cron: "40 0 * * *"
+    - cron: "55 0 * * *"
   workflow_dispatch:
 
 permissions:
@@ -27,36 +28,41 @@ jobs:
     steps:
       - name: Check whether today's report already succeeded
         id: dedupe
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
+            core.setOutput("skip", "false");
             if (context.eventName !== "schedule") {
-              core.setOutput("skip", "false");
               return;
             }
 
-            const now = new Date();
-            const utcDayStart = new Date(Date.UTC(
-              now.getUTCFullYear(),
-              now.getUTCMonth(),
-              now.getUTCDate(),
-            ));
-            const { data } = await github.request(
-              "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: "daily-market-report.yml",
-                status: "success",
-                per_page: 20,
-              },
-            );
-            const priorSuccess = data.workflow_runs.find(
-              (run) => run.id !== context.runId && new Date(run.created_at) >= utcDayStart,
-            );
-            core.setOutput("skip", priorSuccess ? "true" : "false");
-            if (priorSuccess) {
-              core.notice(`Today's report already succeeded in run ${priorSuccess.id}.`);
+            try {
+              const now = new Date();
+              const utcDayStart = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+              ));
+              const { data } = await github.request(
+                "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: "daily-market-report.yml",
+                  status: "success",
+                  per_page: 20,
+                },
+              );
+              const priorSuccess = data.workflow_runs.find(
+                (run) => run.id !== context.runId && new Date(run.created_at) >= utcDayStart,
+              );
+              core.setOutput("skip", priorSuccess ? "true" : "false");
+              if (priorSuccess) {
+                core.notice(`Today's report already succeeded in run ${priorSuccess.id}.`);
+              }
+            } catch (error) {
+              core.warning(`Dedupe check failed; continuing report generation: ${error.message}`);
             }
 
       - name: Checkout

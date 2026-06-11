@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pandas as pd
 
+from src.forecast_text import forecast_sentence
 from src.models import actionable_signal, classify_signal_quality, optional_model_status
 from src.preprocessing import DataQualityReport
 
@@ -24,6 +26,14 @@ def write_summary(
     signal_quality = classify_signal_quality(best)
     signal = actionable_signal(latest_forecast["Predicted_Direction"], signal_quality)
     risk = risk_forecast.iloc[0] if risk_forecast is not None and not risk_forecast.empty else None
+    latest_price = float(forecast.iloc[0]["Predicted_Price"]) / float(
+        math.exp(forecast.iloc[0]["Predicted_Return"])
+    )
+    five_day_return = float(five_day["Predicted_Price"]) / latest_price - 1
+    forecast_values = {
+        "Forecast_1D_Return": latest_forecast["Predicted_Return"],
+        "Forecast_5D_Return": five_day_return,
+    }
     optional_status = optional_status if optional_status is not None else optional_model_status()
     path = output_dir / "summary.md"
     lines = [
@@ -59,6 +69,7 @@ def write_summary(
         f"- 下一交易日预测收益率：{latest_forecast['Predicted_Return']:.4%}",
         f"- 下一交易日预测价格：{latest_forecast['Predicted_Price']:.4f}",
         f"- 第 5 个交易日滚动预测价格：{five_day['Predicted_Price']:.4f}",
+        f"- {forecast_sentence(forecast_values)}",
         "",
         "## 未来 5 日风险状态",
         "",

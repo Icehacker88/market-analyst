@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.market_analyst import MarketSnapshot
 from src.news import NewsItem
+from src.forecast_text import forecast_sentence
 
 
 def write_html_daily_report(
@@ -218,6 +219,7 @@ def _render_html(
             <th>最佳模型</th>
             <th>行动信号</th>
             <th>信号质量</th>
+            <th>预测结论</th>
             <th>1日收益率</th>
             <th>5日价格</th>
             <th>MAPE</th>
@@ -341,7 +343,7 @@ def _prediction_row(row: pd.Series) -> str:
         return f"""
           <tr>
             <td>{escape(str(row.get("Ticker", "")))}</td>
-            <td colspan="13">{escape(str(row.get("Error")))}</td>
+            <td colspan="14">{escape(str(row.get("Error")))}</td>
           </tr>
         """
     return f"""
@@ -350,6 +352,7 @@ def _prediction_row(row: pd.Series) -> str:
         <td>{escape(str(row.get("Best_Model", "")))}</td>
         <td class="{_direction_class(row.get("Forecast_1D_Signal"))}">{escape(str(row.get("Forecast_1D_Signal", "")))}</td>
         <td>{escape(str(row.get("Signal_Quality", "")))}</td>
+        <td>{escape(forecast_sentence(row))}</td>
         <td class="{_movement_class(row.get("Forecast_1D_Return"))}">{_fmt_pct(row.get("Forecast_1D_Return"))}</td>
         <td>{_fmt_num(row.get("Forecast_5D_Price"))}</td>
         <td>{_fmt_num(row.get("MAPE"))}%</td>
