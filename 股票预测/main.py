@@ -9,18 +9,33 @@ from src.pipeline import run_many, run_single
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="多股票预测分析工具：支持本地 CSV 和在线 ticker 数据。"
+        description="多资产预测分析工具：支持本地 CSV、市场行情和基金净值数据。"
     )
     source = parser.add_mutually_exclusive_group(required=False)
     source.add_argument("--input", help="本地 CSV 文件路径，例如 data/raw/AAPL.csv")
-    source.add_argument("--ticker", help="单个股票或 ETF 代码，例如 AAPL、SPY")
+    source.add_argument(
+        "--ticker",
+        help="单个资产代码，例如 SPY、600519.SH 或 016452.OF",
+    )
     source.add_argument(
         "--tickers",
         nargs="+",
-        help="多个股票或 ETF 代码，例如 AAPL MSFT NVDA SPY",
+        help="多个同类型资产代码，例如 AAPL MSFT SPY 或 016452.OF 016453.OF",
     )
     parser.add_argument("--start", default="2016-01-01", help="在线数据开始日期")
     parser.add_argument("--end", default=None, help="在线数据结束日期，默认今天")
+    parser.add_argument(
+        "--data-source",
+        choices=["yahoo", "tushare"],
+        default="yahoo",
+        help="在线数据源，默认 yahoo；Tushare 需要配置 TUSHARE_TOKEN。",
+    )
+    parser.add_argument(
+        "--asset-type",
+        choices=["market", "fund"],
+        default="market",
+        help="在线资产类型：market 为股票/ETF/指数，fund 为公募基金净值。",
+    )
     parser.add_argument(
         "--output-dir",
         default="outputs",
@@ -112,6 +127,8 @@ def main() -> None:
         train_ratio=args.train_ratio,
         forecast_days=args.forecast_days,
         include_arima=not args.skip_arima,
+        data_source=args.data_source,
+        asset_type=args.asset_type,
     )
 
 

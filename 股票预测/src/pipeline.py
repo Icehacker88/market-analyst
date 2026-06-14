@@ -7,9 +7,10 @@ import pandas as pd
 
 from src.config import RunConfig
 from src.data_loader import (
-    download_yahoo_chart,
+    download_online_data,
     infer_ticker_from_path,
     load_csv,
+    online_source_description,
     safe_ticker_for_path,
 )
 from src.features import build_features
@@ -54,15 +55,23 @@ def run_many(
     train_ratio: float = 0.8,
     forecast_days: int = 5,
     include_arima: bool = True,
+    data_source: str = "yahoo",
+    asset_type: str = "market",
 ) -> list[Path]:
     output_paths = []
     for ticker in tickers:
-        raw = download_yahoo_chart(ticker=ticker, start=start, end=end)
+        raw = download_online_data(
+            ticker=ticker,
+            start=start,
+            end=end,
+            data_source=data_source,
+            asset_type=asset_type,
+        )
         output_paths.append(
             _run_frame(
                 raw=raw,
                 ticker=ticker.upper(),
-                source=f"Yahoo Finance chart API ({start} to {end or 'today'})",
+                source=online_source_description(data_source, asset_type, start, end),
                 output_root=output_root,
                 train_ratio=train_ratio,
                 forecast_days=forecast_days,
