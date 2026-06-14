@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import os
+import importlib
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
@@ -11,8 +11,7 @@ import requests
 
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-TUSHARE_API_URL = "https://api.tushare.pro"
-SUPPORTED_DATA_SOURCES = {"yahoo", "tushare"}
+SUPPORTED_DATA_SOURCES = {"yahoo", "akshare"}
 SUPPORTED_ASSET_TYPES = {"market", "fund"}
 
 
@@ -106,83 +105,88 @@ def download_online_data(
             raise DataLoadError("Yahoo 数据源当前仅用于股票、ETF、指数等市场行情。")
         return download_yahoo_chart(ticker=ticker, start=start, end=end)
     if kind == "fund":
-        return download_tushare_fund_nav(ts_code=ticker, start=start, end=end)
-    return download_tushare_daily(ts_code=ticker, start=start, end=end)
+        return download_akshare_fund_nav(fund_code=ticker, start=start, end=end)
+    return download_akshare_a_share(ticker=ticker, start=start, end=end)
 
 
-def download_tushare_daily(
-    ts_code: str,
+def download_akshare_a_share(
+    ticker: str,
     start: str = "2016-01-01",
     end: str | None = None,
-    token: str | None = None,
 ) -> pd.DataFrame:
-    payload = _tushare_request(
-        api_name="daily",
-        params={
-            "ts_code": ts_code.upper(),
-            "start_date": _tushare_date(start),
-            "end_date": _tushare_date(end or datetime.now(timezone.utc)),
-        },
-        fields=["trade_date", "open", "high", "low", "close", "vol"],
-        token=token,
-    )
-    return _tushare_frame(
-        payload,
+    akshare = _load_akshare()
+    symbol = _strip_market_suffix(ticker)
+    try:
+        frame = akshare.stock_zh_a_hist(
+            symbol=symbol,
+            period="daily",
+            start_date=_compact_date(start),
+            end_date=_compact_date(end or datetime.now(timezone.utc)),
+            adjust="qfq",
+        )
+    except Exception as primary_error:
+        try:
+            frame = akshare.stock_zh_a_hist_tx(
+                symbol=_akshare_tx_symbol(ticker),
+                start_date=_compact_date(start),
+                end_date=_compact_date(end or datetime.now(timezone.utc)),
+                adjust="qfq",
+                timeout=30,
+            )
+        except Exception as fallback_error:
+            raise DataLoadError(
+                f"AKShare 下载A股 {ticker} 前复权日线失败；"
+                f"东方财富：{primary_error}；腾讯证券：{fallback_error}"
+            ) from fallback_error
+    return _normalize_akshare_frame(
+        frame,
         {
-            "trade_date": "Date",
+            "日期": "Date",
+            "开盘": "Open",
+            "最高": "High",
+            "最低": "Low",
+            "收盘": "Close",
+            "成交量": "Volume",
+            "date": "Date",
             "open": "Open",
             "high": "High",
             "low": "Low",
             "close": "Close",
-            "vol": "Volume",
+            "amount": "Volume",
         },
-        ts_code,
+        ticker,
     )
 
 
-def download_tushare_fund_nav(
-    ts_code: str,
+def download_akshare_fund_nav(
+    fund_code: str,
     start: str = "2016-01-01",
     end: str | None = None,
-    token: str | None = None,
 ) -> pd.DataFrame:
-    payload = _tushare_request(
-        api_name="fund_nav",
-        params={
-            "ts_code": ts_code.upper(),
-            "start_date": _tushare_date(start),
-            "end_date": _tushare_date(end or datetime.now(timezone.utc)),
-        },
-        fields=[
-            "nav_date",
-            "unit_nav",
-            "accum_nav",
-            "adj_nav",
-            "net_asset",
-            "total_netasset",
-        ],
-        token=token,
-    )
-    frame = _tushare_frame(
-        payload,
+    akshare = _load_akshare()
+    symbol = fund_code.upper().removesuffix(".OF")
+    try:
+        frame = akshare.fund_open_fund_info_em(
+            symbol=symbol,
+            indicator="单位净值走势",
+        )
+    except Exception as exc:
+        raise DataLoadError(f"AKShare 下载基金 {fund_code} 单位净值失败：{exc}") from exc
+    normalized = _normalize_akshare_frame(
+        frame,
         {
-            "nav_date": "Date",
-            "unit_nav": "Unit NAV",
-            "accum_nav": "Accum NAV",
-            "adj_nav": "NAV",
-            "net_asset": "Net Asset",
-            "total_netasset": "Total Net Asset",
+            "净值日期": "Date",
+            "日期": "Date",
+            "单位净值": "NAV",
+            "日增长率": "Daily Growth Rate",
         },
-        ts_code,
+        fund_code,
     )
-    if "NAV" not in frame or frame["NAV"].isna().all():
-        for fallback in ["Accum NAV", "Unit NAV"]:
-            if fallback in frame and frame[fallback].notna().any():
-                frame["NAV"] = frame[fallback]
-                break
-    if "NAV" not in frame or frame["NAV"].isna().all():
-        raise DataLoadError(f"Tushare Pro 返回的 {ts_code} 数据缺少可用净值。")
-    return frame
+    start_date = _parse_date(start).replace(tzinfo=None)
+    end_date = _parse_date(end or datetime.now(timezone.utc)).replace(tzinfo=None)
+    return normalized[
+        (normalized["Date"] >= start_date) & (normalized["Date"] <= end_date)
+    ].reset_index(drop=True)
 
 
 def online_source_description(
@@ -193,8 +197,12 @@ def online_source_description(
 ) -> str:
     source = data_source.strip().lower()
     kind = asset_type.strip().lower()
-    if source == "tushare":
-        label = "Tushare Pro fund_nav" if kind == "fund" else "Tushare Pro daily"
+    if source == "akshare":
+        label = (
+            "AKShare fund_open_fund_info_em"
+            if kind == "fund"
+            else "AKShare stock_zh_a_hist (qfq)"
+        )
     else:
         label = "Yahoo Finance chart API"
     return f"{label} ({start} to {end or 'today'})"
@@ -230,53 +238,48 @@ def _parse_date(value: str | datetime) -> datetime:
     return parsed.to_pydatetime()
 
 
-def _tushare_request(
-    api_name: str,
-    params: dict[str, str],
-    fields: list[str],
-    token: str | None,
-) -> dict[str, object]:
-    resolved_token = token or os.getenv("TUSHARE_TOKEN")
-    if not resolved_token:
-        raise DataLoadError("未配置 TUSHARE_TOKEN，无法使用 Tushare Pro 数据源。")
+def _load_akshare() -> object:
     try:
-        response = requests.post(
-            TUSHARE_API_URL,
-            json={
-                "api_name": api_name,
-                "token": resolved_token,
-                "params": params,
-                "fields": ",".join(fields),
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:
-        raise DataLoadError(f"Tushare Pro 请求失败：{exc}") from exc
-    if payload.get("code") != 0:
-        raise DataLoadError(f"Tushare Pro 返回错误：{payload.get('msg') or payload}")
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise DataLoadError("Tushare Pro 没有返回可用数据。")
-    return data
+        return importlib.import_module("akshare")
+    except ImportError as exc:
+        raise DataLoadError(
+            "未安装免费数据源 AKShare，请运行：pip install -r requirements-free-data.txt"
+        ) from exc
 
 
-def _tushare_frame(
-    payload: dict[str, object],
+def _normalize_akshare_frame(
+    raw: pd.DataFrame,
     rename: dict[str, str],
     code: str,
 ) -> pd.DataFrame:
-    fields = payload.get("fields")
-    items = payload.get("items")
-    if not isinstance(fields, list) or not isinstance(items, list) or not items:
-        raise DataLoadError(f"Tushare Pro 没有返回 {code} 的历史数据。")
-    frame = pd.DataFrame(items, columns=fields).rename(columns=rename)
+    if raw is None or raw.empty:
+        raise DataLoadError(f"AKShare 没有返回 {code} 的历史数据。")
+    frame = raw.rename(columns=rename).copy()
     if "Date" not in frame:
-        raise DataLoadError(f"Tushare Pro 返回的 {code} 数据缺少日期字段。")
-    frame["Date"] = pd.to_datetime(frame["Date"], format="%Y%m%d", errors="coerce")
+        raise DataLoadError(f"AKShare 返回的 {code} 数据缺少日期字段。")
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
     return frame.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
 
 
-def _tushare_date(value: str | datetime) -> str:
+def _compact_date(value: str | datetime) -> str:
     return _parse_date(value).strftime("%Y%m%d")
+
+
+def _strip_market_suffix(ticker: str) -> str:
+    return ticker.upper().removesuffix(".SH").removesuffix(".SZ").removesuffix(".BJ")
+
+
+def _akshare_tx_symbol(ticker: str) -> str:
+    upper = ticker.upper()
+    code = _strip_market_suffix(upper)
+    if upper.endswith(".SH"):
+        return f"sh{code}"
+    if upper.endswith(".SZ"):
+        return f"sz{code}"
+    if upper.endswith(".BJ"):
+        return f"bj{code}"
+    if code.startswith(("5", "6", "9")):
+        return f"sh{code}"
+    if code.startswith(("4", "8")):
+        return f"bj{code}"
+    return f"sz{code}"

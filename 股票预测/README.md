@@ -6,9 +6,9 @@
 
 ## 功能
 
-- 支持本地 CSV、Yahoo Finance 和 Tushare Pro 在线数据
+- 支持本地 CSV、Yahoo Finance 和免费 AKShare 在线数据
 - 支持单只股票和多只股票批量运行
-- 支持通过 Tushare Pro 读取A股日线和公募基金净值；不会自动启用A股预测
+- 支持通过 AKShare 读取A股前复权日线和公募基金净值；不会自动启用A股预测
 - 自动识别 `Adj Close`、`Close` 或 `NAV` 作为价格字段
 - 如果存在 `Volume`，会自动加入成交量分析和成交量特征
 - 使用时间顺序划分训练集和测试集，避免随机切分导致的数据泄漏
@@ -58,27 +58,27 @@ python main.py --ticker SPY --start 2016-01-01
 python main.py --tickers AAPL MSFT NVDA SPY --start 2016-01-01
 ```
 
-### 3. 使用 Tushare Pro 数据源
+### 3. 使用免费 AKShare 数据源
 
-先配置 Tushare Token：
+AKShare 免费且不需要 Token。为避免增加现有 GitHub 日报安装时间，它作为可选依赖单独安装：
 
 ```bash
-export TUSHARE_TOKEN="你的 Tushare Pro Token"
+pip install -r requirements-free-data.txt
 ```
 
-读取A股日线时使用 `.SH`、`.SZ` 或 `.BJ` 代码。只有显式运行以下命令时才会预测A股，现有投资日报仍使用 Yahoo Finance：
+读取A股前复权日线时可使用 `.SH`、`.SZ`、`.BJ` 后缀，也可直接使用六位代码。只有显式运行以下命令时才会预测A股，现有投资日报仍使用 Yahoo Finance：
 
 ```bash
-python main.py --ticker 600519.SH --data-source tushare --asset-type market --start 2016-01-01
+python main.py --ticker 600519.SH --data-source akshare --asset-type market --start 2016-01-01
 ```
 
 读取公募基金净值并单独运行预测：
 
 ```bash
-python main.py --ticker 016452.OF --data-source tushare --asset-type fund --start 2022-11-29
+python main.py --ticker 016452.OF --data-source akshare --asset-type fund --start 2022-11-29
 ```
 
-Tushare 的公募基金净值 `fund_nav` 接口需要相应积分权限。对于场外 QDII 基金，模型预测目标是下一次公布的基金净值方向和变化，不是盘中可成交价格；净值还会受汇率、估值时差、费用和跟踪误差影响。
+AKShare 使用公开网站数据，免费但接口可能随上游网站调整而变化。A股日线默认从东方财富读取，失败时自动回退到腾讯证券前复权数据。对于场外 QDII 基金，模型预测目标是下一次公布的基金净值方向和变化，不是盘中可成交价格；净值还会受汇率、估值时差、费用和跟踪误差影响。
 
 ### 4. 用本地 CSV 运行
 

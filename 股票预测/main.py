@@ -26,9 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", default=None, help="在线数据结束日期，默认今天")
     parser.add_argument(
         "--data-source",
-        choices=["yahoo", "tushare"],
+        choices=["yahoo", "akshare"],
         default="yahoo",
-        help="在线数据源，默认 yahoo；Tushare 需要配置 TUSHARE_TOKEN。",
+        help="在线数据源，默认 yahoo；akshare 免费且无需Token。",
     )
     parser.add_argument(
         "--asset-type",
