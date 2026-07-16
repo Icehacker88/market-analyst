@@ -1,0 +1,60 @@
+name: Official Kronos Daily Forecast
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Optional comma-separated symbols"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: official-kronos-daily
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install official Kronos
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install numpy pandas einops==0.8.1 huggingface_hub==0.33.1 safetensors tqdm
+          git clone https://github.com/shiyu-coder/Kronos.git "$RUNNER_TEMP/kronos"
+          git -C "$RUNNER_TEMP/kronos" checkout 67b630e67f6a18c9e9be918d9b4337c960db1e9a
+      - name: Request GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          token=$(curl --fail --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=orivane-kronos" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Run and upload Kronos forecasts
+        env:
+          ORIVANE_GITHUB_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          KRONOS_REPO: ${{ runner.temp }}/kronos
+        run: >-
+          python 股票预测/scripts/run_official_kronos_batch.py
+          --site-url https://orivane-market-intelligence.pages.dev
+          --symbols "${{ inputs.symbols }}"
+          --output output/kronos/official-kronos-latest.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-kronos-${{ github.run_id }}
+          path: output/kronos/official-kronos-latest.json
+          if-no-files-found: warn
+          retention-days: 30
