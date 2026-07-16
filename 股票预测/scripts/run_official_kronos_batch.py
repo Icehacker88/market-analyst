@@ -25,6 +25,7 @@ DEFAULT_SYMBOLS = [
 ]
 MODEL_ID = "NeoQuasar/Kronos-mini"
 TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-2k"
+RESOLVE_BATCH_SIZE = 5
 
 
 def request_json(url: str, method: str = "GET", payload: Any | None = None, token: str | None = None, timeout: int = 90) -> Any:
@@ -40,8 +41,12 @@ def request_json(url: str, method: str = "GET", payload: Any | None = None, toke
 
 
 def resolve_assets(site_url: str, symbols: list[str]) -> dict[str, dict[str, Any]]:
-    payload = request_json(f"{site_url}/api/assets/resolve", "POST", {"symbols": symbols})
-    return {str(item["symbol"]).upper(): item for item in payload.get("assets", [])}
+    assets: dict[str, dict[str, Any]] = {}
+    for offset in range(0, len(symbols), RESOLVE_BATCH_SIZE):
+        batch = symbols[offset:offset + RESOLVE_BATCH_SIZE]
+        payload = request_json(f"{site_url}/api/assets/resolve", "POST", {"symbols": batch})
+        assets.update({str(item["symbol"]).upper(): item for item in payload.get("assets", [])})
+    return assets
 
 
 def fetch_history(site_url: str, asset: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +81,12 @@ def prepare_frame(history: dict[str, Any], lookback: int):
     frame = frame[["open", "high", "low", "close", "volume", "amount"]]
     future = pd.bdate_range(frame.index[-1] + pd.Timedelta(days=1), periods=22)
     return frame, future
+
+
+def timestamp_series(values):
+    import pandas as pd
+
+    return pd.Series(pd.to_datetime(values), dtype="datetime64[ns]")
 
 
 def clipped_return(base_price: float, predicted_price: float, volatility: float, days: int) -> float:
@@ -150,7 +161,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prepared = []
         for symbol in batch_symbols:
             try:
-                asset = assets[symbol]
+                asset = assets.get(symbol)
+                if not asset:
+                    raise ValueError("asset resolution unavailable")
                 history = fetch_history(site_url, asset)
                 frame, future = prepare_frame(history, args.lookback)
                 prepared.append((symbol, history, frame, future))
@@ -161,8 +174,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         try:
             predictions = predictor.predict_batch(
                 [item[2] for item in prepared],
-                [item[2].index for item in prepared],
-                [item[3] for item in prepared],
+                [timestamp_series(item[2].index) for item in prepared],
+                [timestamp_series(item[3]) for item in prepared],
                 pred_len=22,
                 T=args.temperature,
                 top_p=args.top_p,
@@ -174,7 +187,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             for symbol, history, frame, future in prepared:
                 try:
-                    prediction = predictor.predict(frame, frame.index, future, 22, T=args.temperature, top_p=args.top_p, sample_count=args.sample_count, verbose=False)
+                    prediction = predictor.predict(
+                        frame,
+                        timestamp_series(frame.index),
+                        timestamp_series(future),
+                        22,
+                        T=args.temperature,
+                        top_p=args.top_p,
+                        sample_count=args.sample_count,
+                        verbose=False,
+                    )
                     forecasts.append(build_record(symbol, history, frame, future, prediction, args.lookback, args.sample_count))
                 except Exception as single_exc:  # noqa: BLE001
                     errors.append({"symbol": symbol, "error": f"{exc}; retry: {single_exc}"})
@@ -182,6 +204,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not forecasts:
+        raise RuntimeError(f"Official Kronos produced no forecasts ({len(errors)} errors); see {output}.")
     if args.upload and forecasts:
         token = os.environ.get("ORIVANE_GITHUB_OIDC_TOKEN") or os.environ.get("ORIVANE_OPTIMIZER_TOKEN")
         if not token:
