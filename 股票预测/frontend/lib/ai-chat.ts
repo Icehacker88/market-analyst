@@ -6,8 +6,23 @@ export function createChatMessage(role: AiChatMessage["role"], content: string):
   return { id: crypto.randomUUID(), role, content: content.trim(), created_at: new Date().toISOString() };
 }
 
+export function dedupeChatMessages(messages: AiChatMessage[]): AiChatMessage[] {
+  return messages.reduce<AiChatMessage[]>((result, message) => {
+    const content = message.content.trim();
+    if (!content) return result;
+    const normalized = content === message.content ? message : { ...message, content };
+    const previous = result.at(-1);
+    if (previous?.role === normalized.role && previous.content === normalized.content) {
+      if (normalized.analysis) result[result.length - 1] = normalized;
+      return result;
+    }
+    result.push(normalized);
+    return result;
+  }, []);
+}
+
 export function compactChatThread(messages: AiChatMessage[], existingSummary = ""): AiChatThread {
-  const clean = messages.filter((message) => message.content.trim());
+  const clean = dedupeChatMessages(messages);
   if (clean.length <= AI_CHAT_MESSAGE_LIMIT) return { messages: clean, summary: existingSummary || undefined, updated_at: new Date().toISOString() };
   const archived = clean.slice(0, clean.length - 16);
   const summary = [existingSummary, ...archived.map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)]
@@ -24,4 +39,3 @@ export function conversationForApi(thread?: AiChatThread): Array<{ role: "user" 
     ...thread.messages.slice(-12).map(({ role, content }) => ({ role, content })),
   ];
 }
-

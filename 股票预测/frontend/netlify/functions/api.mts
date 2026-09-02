@@ -4,7 +4,6 @@ import { getUser } from "@netlify/identity";
 import { pinyin } from "pinyin-pro";
 import publicData from "./data/public-data.json" with { type: "json" };
 import { sendEmail } from "./_shared/market-email.ts";
-import { extractSseBlocks, parseSseBlock } from "../../lib/sse";
 
 type Asset = {
   symbol: string;
@@ -4124,47 +4123,6 @@ async function callGeminiModel(model: string, prompt: string, apiKey: string, st
   return text;
 }
 
-async function callGeminiModelStream(model: string, prompt: string, apiKey: string, structured: boolean, onToken: (token: string) => void): Promise<string> {
-  const thinkingConfig = model.startsWith("gemini-3") ? { thinkingLevel: "low" } : { thinkingBudget: 0 };
-  const generationConfig = structured
-    ? { temperature: 0.35, maxOutputTokens: 1800, thinkingConfig, responseMimeType: "application/json" }
-    : { temperature: 0.45, maxOutputTokens: 1400, thinkingConfig };
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig }),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => ({})) as { error?: { message?: string } };
-    throw new Error(`Gemini ${model} returned ${response.status}${payload.error?.message ? `: ${payload.error.message}` : ""}.`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let complete = "";
-  let finishReason = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const parsed = extractSseBlocks(buffer, done);
-    buffer = parsed.rest;
-    for (const block of parsed.blocks) {
-      const raw = parseSseBlock(block).data;
-      if (!raw || raw === "[DONE]") continue;
-      const payload = JSON.parse(raw) as { candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
-      finishReason = payload.candidates?.[0]?.finishReason || finishReason;
-      const token = payload.candidates?.[0]?.content?.parts?.filter((part) => part.thought !== true).map((part) => part.text || "").join("") || "";
-      if (!token) continue;
-      complete += token;
-      if (!structured) onToken(token);
-    }
-    if (done) break;
-  }
-  if (!complete.trim()) throw new Error(`Gemini ${model} returned an empty response${finishReason ? ` (${finishReason})` : ""}.`);
-  return complete.trim();
-}
-
 async function geminiAnalysis(input: {
   language: AiLanguage;
   asset: Asset;
@@ -4251,58 +4209,57 @@ function sseEvent(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+function aiStreamChunks(value: string): string[] {
+  return value.match(/[\s\S]{1,120}/g) || [];
+}
+
+function publicAiError(cause: unknown, language: AiLanguage): { code: string; message: string } {
+  if (cause instanceof AiRequestError) return { code: cause.code, message: cause.message };
+  return {
+    code: "ai_temporarily_unavailable",
+    message: language === "zh" ? "AI 服务连接暂时中断，请重试。" : "The AI connection was interrupted. Please try again.",
+  };
+}
+
 async function aiAnalysisStreamResponse(request: Request): Promise<Response> {
   if (request.method !== "POST") return privateJson({ error: { code: "method_not_allowed", message: "Method not allowed." } }, 405);
   const parsed = parseAiRequestBody(await parseBody(request));
   if (!parsed.symbol) return privateJson({ error: { code: "validation_error", message: "Symbol is required." } }, 422);
+  let cancelled = false;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const enqueue = (chunk: Uint8Array): boolean => {
+        if (cancelled) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          cancelled = true;
+          return false;
+        }
+      };
       try {
+        enqueue(new TextEncoder().encode(": connected\n\n"));
         await enforceAiQuota(request);
         const input = await loadAiAnalysisInput(parsed.symbol, parsed.language, parsed.question, parsed.conversation);
-        const apiKey = (process.env.GEMINI_API_KEY || "").trim().replace(/^['"]|['"]$/g, "");
-        if (!apiKey) throw new AiRequestError(503, "gemini_not_configured", "Gemini API Key 尚未配置。");
-        const structured = !parsed.question;
-        const prompt = aiPrompt(input);
-        let text = "";
-        let modelUsed = configuredGeminiModel();
-        const errors: string[] = [];
-        for (const model of geminiModelCandidates()) {
-          try {
-            text = await callGeminiModelStream(model, prompt, apiKey, structured, (token) => controller.enqueue(sseEvent("token", { text: token })));
-            modelUsed = model;
-            break;
-          } catch (cause) {
-            errors.push(cause instanceof Error ? cause.message : String(cause));
+        const data = await geminiAnalysis(input);
+        if (parsed.question) {
+          for (const text of aiStreamChunks(data.summary)) {
+            if (!enqueue(sseEvent("token", { text }))) return;
           }
         }
-        if (!text) {
-          for (const model of geminiModelCandidates()) {
-            try {
-              text = await callGeminiModel(model, prompt, apiKey, structured);
-              modelUsed = model;
-              break;
-            } catch (cause) {
-              errors.push(cause instanceof Error ? cause.message : String(cause));
-            }
-          }
-        }
-        if (!text) throw new Error(errors.at(-1) || "Gemini unavailable.");
-        let data: AiAnalysis;
-        if (structured) {
-          try { data = normalizeAiAnalysis(parseGeminiJson(text), { symbol: input.asset.symbol, model: modelUsed, language: parsed.language }); }
-          catch { data = structuredForecastRead(input, modelUsed); }
-        } else {
-          let summary = text.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/, "").trim();
-          try { summary = String(parseGeminiJson(summary).summary || summary).trim(); } catch { /* Free-form text is expected. */ }
-          data = normalizeAiAnalysis({ summary, questions: structuredForecastRead(input, modelUsed).questions }, { symbol: input.asset.symbol, model: modelUsed, language: parsed.language });
-        }
-        controller.enqueue(sseEvent("done", { data }));
+        enqueue(sseEvent("done", { data }));
       } catch (cause) {
-        controller.enqueue(sseEvent("error", { message: cause instanceof Error ? cause.message : "AI stream failed." }));
+        const error = publicAiError(cause, parsed.language);
+        enqueue(sseEvent("error", error));
       } finally {
-        controller.close();
+        if (!cancelled) {
+          try { controller.close(); } catch { /* The browser may have closed the stream. */ }
+        }
       }
+    },
+    cancel() {
+      cancelled = true;
     },
   });
   return new Response(stream, { headers: { ...PRIVATE_HEADERS, "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" } });

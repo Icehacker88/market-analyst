@@ -301,7 +301,7 @@ export async function streamAiAnalysis(
   const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
   const token = typeof window !== "undefined" ? localStorage.getItem("orivane-auth-token") : null;
   if (token) headers.Authorization = `Bearer ${token}`;
-  const timeout = typeof window !== "undefined" ? combinedSignal(signal, 45_000) : null;
+  const timeout = typeof window !== "undefined" ? combinedSignal(signal, 50_000) : null;
   try {
     const response = await fetch(`${apiBase()}/api/ai/analysis/stream`, {
       method: "POST",
@@ -340,6 +340,15 @@ export async function streamAiAnalysis(
     }
     if (!result) throw new ApiError("AI stream ended without a result", 502);
     return result;
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    if (cause instanceof ApiError && [400, 401, 403, 422, 429].includes(cause.status)) throw cause;
+    try {
+      return await getAiAnalysis(symbol, language, question, conversation, signal);
+    } catch (fallbackCause) {
+      if (fallbackCause instanceof ApiError && [401, 403, 422, 429, 503].includes(fallbackCause.status)) throw fallbackCause;
+      throw new ApiError(language === "zh" ? "AI 服务连接暂时中断，请重试。" : "The AI connection was interrupted. Please try again.", 502);
+    }
   } finally {
     timeout?.cleanup();
   }

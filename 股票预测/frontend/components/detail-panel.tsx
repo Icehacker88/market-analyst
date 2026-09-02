@@ -4,7 +4,7 @@ import { AppLink as Link } from "./app-link";
 import { BellRing, Bookmark, BookmarkCheck, Check, Database, RefreshCw, RotateCcw, Share2, Sparkles, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { runForecast, streamAiAnalysis, taskStatus } from "@/lib/api";
-import { compactChatThread, conversationForApi, createChatMessage } from "@/lib/ai-chat";
+import { compactChatThread, conversationForApi, createChatMessage, dedupeChatMessages } from "@/lib/ai-chat";
 import { displayAssetName } from "@/lib/assets";
 import { trackEvent } from "@/lib/analytics";
 import { forecastBrief } from "@/lib/forecast-brief";
@@ -65,7 +65,7 @@ export function DetailPanel({
   const stats = (predictions?.live?.statistics || predictions?.statistics)?.find((item) => item.window === "All");
   const aiChatKey = `${asset.symbol}:${language}`;
   const aiThread = userState.ai_chats?.[aiChatKey];
-  const aiMessages = aiThread?.messages || [];
+  const aiMessages = dedupeChatMessages(aiThread?.messages || []);
   const setAiMessages = (updater: AiChatMessage[] | ((current: AiChatMessage[]) => AiChatMessage[])) => {
     updateUserState((current) => {
       const existing = current.ai_chats?.[aiChatKey];
