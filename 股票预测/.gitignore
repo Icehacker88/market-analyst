@@ -3,6 +3,20 @@ __pycache__/
 .DS_Store
 .Rhistory
 .venv/
+backend/data/cache/*
+!backend/data/cache/.gitkeep
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
+frontend/out/
+frontend/output/
+frontend/.qa/
+frontend/functions/api/
+.netlify/
+.qa/
+Market_Analysis.zip
+weread_deep_reading_report.md
+design-*.png
 
 data/raw/*
 !data/raw/.gitkeep

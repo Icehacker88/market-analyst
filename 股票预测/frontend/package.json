@@ -1,0 +1,42 @@
+{
+  "name": "orivane-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "start": "next start",
+    "build": "next build",
+    "build:cloudflare": "node scripts/generate-seo-forecasts.mjs && node scripts/generate-cloudflare-worker.mjs && next build",
+    "preview:cloudflare": "npm run build:cloudflare && wrangler pages dev out --compatibility-date=2026-07-01",
+    "deploy:cloudflare": "npm run build:cloudflare && wrangler pages deploy out --project-name=orivane-market-intelligence",
+    "deploy:favorite-optimizer": "wrangler deploy --config wrangler.favorite-optimizer.toml",
+    "deploy:cloudflare:all": "npm run deploy:cloudflare && npm run deploy:favorite-optimizer",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.7.9",
+    "@netlify/identity": "^1.2.0",
+    "echarts": "^6.1.0",
+    "lucide-react": "^0.468.0",
+    "next": "^16.0.0",
+    "pinyin-pro": "^3.28.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^4.2.5",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.53.0"
+  }
+}

@@ -1,0 +1,24 @@
+name = "orivane-favorite-optimizer"
+main = "workers/favorite-optimizer.ts"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+[vars]
+ORIVANE_SITE_URL = "https://orivane-market-intelligence.pages.dev"
+ORIVANE_FAVORITE_OPTIMIZER_LIMIT = "20"
+ORIVANE_FAVORITE_OPTIMIZER_USERS_LIMIT = "500"
+ORIVANE_FAVORITE_OPTIMIZER_DELAY_MS = "400"
+
+[triggers]
+# Split the free-tier subrequest load into two daily partitions (08:15/08:45 China time).
+crons = ["15 0 * * *", "45 0 * * *"]
+
+[[kv_namespaces]]
+binding = "ORIVANE_USER_STATE"
+id = "f910a1b2d0db4cd2aac0c28c152a089f"
+
+[[kv_namespaces]]
+binding = "ORIVANE_API_METRICS"
+id = "b8c63871bb714ce5bda77b3e7675472d"

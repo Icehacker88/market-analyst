@@ -36,7 +36,7 @@ class RankMetricsTests(unittest.TestCase):
 
         self.assertEqual(ranked.iloc[0]["Model"], "Direction Edge")
 
-    def test_lowest_mape_is_preferred_when_no_model_has_direction_edge(self) -> None:
+    def test_direction_validation_is_preferred_over_lower_mape(self) -> None:
         metrics = pd.DataFrame(
             [
                 {
@@ -62,7 +62,8 @@ class RankMetricsTests(unittest.TestCase):
 
         ranked = _rank_metrics(metrics)
 
-        self.assertEqual(ranked.iloc[0]["Model"], "Lower MAPE")
+        self.assertEqual(ranked.iloc[0]["Model"], "Higher CV Accuracy")
+        self.assertIn("Prediction_Score", ranked.columns)
 
     def test_balanced_accuracy_breaks_direction_candidate_tie(self) -> None:
         metrics = pd.DataFrame(

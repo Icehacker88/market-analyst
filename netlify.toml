@@ -1,0 +1,22 @@
+[build]
+  base = "股票预测/frontend"
+  command = "npm run build"
+  publish = "out"
+
+[functions]
+  directory = "股票预测/frontend/netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

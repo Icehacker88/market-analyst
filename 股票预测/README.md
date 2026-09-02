@@ -4,6 +4,143 @@
 
 > 重要提示：本工具只用于个人研究和参考，不构成投资建议。
 
+## Orivane Web 应用
+
+仓库现已包含可实际运行的 FastAPI + Next.js Web 应用。它直接复用现有 `src/` 数据获取、清洗、技术指标、模型训练、滚动验证、风险模型、`outputs/` 和真实预测账本，不生成虚假行情或预测。
+
+公网地址：<https://orivane-market-intelligence.pages.dev/>
+
+主要功能：
+
+- 搜索 Yahoo Finance 股票、ETF、指数、汇率，以及东方财富 A股和公募基金
+- 独立简洁首页，搜索或点击热门推荐后进入分析页
+- 最多同时选择 5 个资产，URL 保存当前选择
+- 实际价格与以区间首日为 100 的标准化走势对比
+- 查看技术指标、最新模型预测、模型表现和真实历史预测准确率
+- 手动触发重新分析；同一资产不会重复并发训练
+- 收藏常看资产，并在独立收藏页面快速查看
+- 中文 / English 与 Light / Dark 模式切换，偏好保存在浏览器
+- 桌面、平板和手机响应式布局
+
+### Web 系统架构
+
+```text
+backend/
+  app/main.py              FastAPI 入口与 API 路由
+  app/services/            搜索、行情、缓存、outputs、账本和预测任务适配层
+  app/schemas/             Pydantic 请求与响应结构
+  tests/                   后端核心测试
+frontend/
+  app/                     Next.js 页面：分析面板与收藏页
+  components/              搜索、对比图、资产详情、主题和语言组件
+  lib/                     API 客户端、类型、格式化和选择逻辑
+src/                       原有预测核心逻辑，CLI 与 Web 共用
+data/history/              原有真实预测账本
+outputs/                   原有预测结果，Web 优先读取最新结果
+```
+
+### Web 本地安装
+
+后端：
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+前端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+浏览器打开 `http://localhost:3000`。也可在 `股票预测/` 目录运行：
+
+```bash
+make dev
+```
+
+### Web 环境变量
+
+- `backend/.env.example`：CORS 与缓存路径
+- `frontend/.env.example`：后端 API 地址
+- `.env.example`：可选 OpenAI 和邮件日报配置
+
+核心网页不依赖 OpenAI API；没有 `OPENAI_API_KEY` 时搜索、行情、技术指标、预测、账本和收藏仍可使用。
+
+### Web API
+
+- `GET /api/health`
+- `GET /api/assets/search?q=SPY`
+- `POST /api/assets/resolve`
+- `GET /api/market/history`
+- `POST /api/compare`
+- `GET /api/forecast/latest`
+- `POST /api/forecast/run`
+- `GET /api/forecast/status/{task_id}`
+- `GET /api/performance/{symbol}`
+- `GET /api/predictions/history/{symbol}`
+
+所有 API 使用 Pydantic 校验、统一错误结构，并在响应前移除 `NaN` 和 `Infinity`。
+
+### 收藏、搜索与预测
+
+- 在资产概览或详情区点击收藏按钮，资产会保存到浏览器 `localStorage`。
+- 顶部“收藏”入口打开快速查看页面。
+- 搜索支持代码与名称；A股和公募基金会从云端补充名称与数据。
+- 网页优先读取 `outputs/{symbol}/最新运行目录`，不会在刷新页面时重新训练。
+- 只有点击“重新分析”才会调用现有 `src.pipeline.run_many()` 预测流程。
+
+### 数据缓存
+
+- 搜索结果：本地文件缓存 24 小时
+- 历史行情与技术指标：本地文件缓存 4 小时
+- 最新预测与模型表现：直接读取现有 `outputs/`
+- 真实预测历史：继续读取 `data/history/prediction_ledger.csv`
+
+缓存位于 `backend/data/cache/`，包含缓存版本、生成时间和请求参数，不提交到 Git。
+
+### 测试与构建
+
+```bash
+make test
+make build
+```
+
+等价命令：
+
+```bash
+python -m unittest discover -s tests -q
+backend/.venv/bin/python -m pytest backend/tests -q
+cd frontend && npm test
+cd frontend && npm run typecheck
+cd frontend && npm run build
+```
+
+### 生产部署
+
+前端当前部署在 Cloudflare Pages，`frontend/functions/api/[[path]].ts` 由 `frontend/netlify/functions/api.mts` 自动生成并提供公网接口。部署前先把最新真实预测结果导出到公开数据包：
+
+```bash
+cd 股票预测
+python scripts/export_public_web_data.py
+cd frontend && npm run build
+```
+
+公网版本使用 Yahoo 获取实时行情和 A 股日线，并使用东方财富云端接口获取 A 股中文名称和公募基金净值；不依赖本机 AKShare。资产对比、搜索、收藏、语言/主题切换及已发布预测均可在线使用。不得把 `.env`、API Key 或 SMTP 密码提交到仓库。
+
+### 数据源与合规限制
+
+- Yahoo Finance 与 AKShare 都可能因上游限流、接口变化或市场休市返回失败；网页会显示真实错误，不会随机填充。
+- 场外基金预测目标是下一次公布的净值，不是盘中实时成交价格。
+- 真实历史准确率只统计已到目标日期并完成验证的冻结预测；回测表现与真实线上记录在页面中分开显示。
+- 本工具仅用于研究和教育目的，不构成投资建议。历史表现不代表未来结果。
+
 ## 功能
 
 - 支持本地 CSV、Yahoo Finance 和免费 AKShare 在线数据

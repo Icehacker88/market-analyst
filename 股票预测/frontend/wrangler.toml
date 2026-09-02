@@ -1,0 +1,32 @@
+name = "orivane-market-intelligence"
+pages_build_output_dir = "out"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ORIVANE_MARKET_DATA_PROVIDER = "free-yahoo-eastmoney"
+ORIVANE_AI_DAILY_LIMIT = "20"
+
+[[kv_namespaces]]
+binding = "ORIVANE_API_CACHE"
+id = "952c1a561f814b319fd0cd4eccef8ad7"
+
+[[kv_namespaces]]
+binding = "ORIVANE_API_METRICS"
+id = "b8c63871bb714ce5bda77b3e7675472d"
+
+[[kv_namespaces]]
+binding = "ORIVANE_ASSET_LOGOS"
+id = "ae83b61ba0014837916c30c10f65174d"
+
+[[kv_namespaces]]
+binding = "ORIVANE_USER_STATE"
+id = "f910a1b2d0db4cd2aac0c28c152a089f"
+
+[[kv_namespaces]]
+binding = "ORIVANE_AI_USAGE"
+id = "071c16b453744762a683723760d2ec29"
+
+[[kv_namespaces]]
+binding = "ORIVANE_CLOUD_FORECASTS"
+id = "ad46e096b1e3450485200e76ed56916a"

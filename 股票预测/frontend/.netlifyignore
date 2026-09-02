@@ -1,0 +1,7 @@
+.next/
+node_modules/
+out/
+coverage/
+tsconfig.tsbuildinfo
+.DS_Store
+deploy-*.zip

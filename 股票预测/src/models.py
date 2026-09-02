@@ -291,25 +291,37 @@ def _metric_float(metrics: Mapping[str, object], key: str) -> float:
 
 
 def _rank_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
-    direction_candidates = metrics[metrics["CV_Directional_Edge"] > 0].sort_values(
+    scored = metrics.copy()
+    scored["Prediction_Score"] = scored.apply(_model_prediction_score, axis=1)
+    return scored.sort_values(
         [
-            "CV_Directional_Accuracy",
+            "Prediction_Score",
             "CV_Directional_Edge",
             "CV_Balanced_Accuracy",
+            "Return_RMSE",
             "MAPE",
         ],
-        ascending=[False, False, False, True],
+        ascending=[False, False, False, True, True],
     )
-    if direction_candidates.empty:
-        return metrics.sort_values(
-            ["MAPE", "Return_RMSE", "Directional_Accuracy"],
-            ascending=[True, True, False],
-        )
-    remaining = metrics.drop(direction_candidates.index).sort_values(
-        ["MAPE", "Return_RMSE", "Directional_Accuracy"],
-        ascending=[True, True, False],
+
+
+def _model_prediction_score(row: pd.Series) -> float:
+    cv_edge = _metric_float(row, "CV_Directional_Edge")
+    cv_balanced = _metric_float(row, "CV_Balanced_Accuracy")
+    cv_accuracy = _metric_float(row, "CV_Directional_Accuracy")
+    return_rmse = _metric_float(row, "Return_RMSE")
+    mape = _metric_float(row, "MAPE")
+    if not np.isfinite(return_rmse):
+        return_rmse = 1.0
+    if not np.isfinite(mape):
+        mape = 100.0
+    return (
+        cv_balanced * 0.45
+        + cv_accuracy * 0.25
+        + cv_edge * 2.4
+        - return_rmse * 20
+        - mape * 0.02
     )
-    return pd.concat([direction_candidates, remaining])
 
 
 def choose_best_model(models: list[TrainedModel], metrics: pd.DataFrame) -> TrainedModel:

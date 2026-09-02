@@ -1,0 +1,15 @@
+# Local Netlify folder
+.netlify
+node_modules/
+.next/
+out/
+output/
+.qa/
+functions/api/
+.wrangler/
+.playwright-cli/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+!.env.example
