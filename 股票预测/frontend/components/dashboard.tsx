@@ -67,7 +67,7 @@ function mergePeriodReturns(previous: PeriodReturns | undefined, incoming: Perio
 }
 
 export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }) {
-  const { language, t } = useApp();
+  const { privateStorage, language, t } = useApp();
   const router = useRouter();
   const params = useSearchParams();
   const initialSymbolKey = initialSymbols.join(",");
@@ -109,10 +109,10 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   const updateSymbols = useCallback((next: string[], preferredActive?: string) => {
     const nextActive = preferredActive && next.includes(preferredActive) ? preferredActive : next.includes(active) ? active : next[0] || "";
     setActive(nextActive);
-    saveComparisonDraft(localStorage, next);
-    if (nextActive) rememberRecentSymbol(localStorage, nextActive);
+    saveComparisonDraft(privateStorage, next);
+    if (nextActive) rememberRecentSymbol(privateStorage, nextActive);
     router.replace(dashboardDestination(next, { ...viewState, active: nextActive, isolated: next.includes(isolatedSymbol || "") ? isolatedSymbol : null }), { scroll: false });
-  }, [active, isolatedSymbol, router, viewState]);
+  }, [active, isolatedSymbol, privateStorage, router, viewState]);
 
   const updateView = useCallback((patch: Partial<DashboardViewState>) => {
     const next = { ...viewState, ...patch };
@@ -163,9 +163,9 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   useEffect(() => {
     if (!active || viewed.current.has(active)) return;
     viewed.current.add(active);
-    rememberRecentSymbol(localStorage, active);
+    rememberRecentSymbol(privateStorage, active);
     trackEvent("asset_view");
-  }, [active]);
+  }, [active, privateStorage]);
 
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;

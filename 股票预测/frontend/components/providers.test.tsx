@@ -1,7 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { Asset } from "@/lib/types";
 import { Providers, useApp } from "./providers";
+
+vi.mock("@/lib/api", async (original) => ({
+  ...await original<typeof import("@/lib/api")>(),
+  getAuthConfig: vi.fn(async () => ({ googleEnabled: false, appleEnabled: false, signupEnabled: true })),
+  getCurrentUser: vi.fn(async () => null),
+}));
+vi.mock("@/lib/analytics", () => ({ trackEvent: vi.fn(), observeWebVitals: () => () => {} }));
+vi.mock("./pwa-runtime", () => ({ PwaRuntime: () => null }));
 
 const spy: Asset = {
   symbol: "SPY",
@@ -23,9 +31,9 @@ function Probe() {
 }
 
 describe("persisted preferences", () => {
-  it("switches dark mode, language and favorites", () => {
+  it("switches dark mode, language and favorites", async () => {
     localStorage.clear();
-    render(<Providers><Probe /></Providers>);
+    await act(async () => { render(<Providers><Probe /></Providers>); });
     fireEvent.click(screen.getByText("theme"));
     fireEvent.click(screen.getByText("language"));
     fireEvent.click(screen.getByText("favorite"));

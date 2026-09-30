@@ -18,7 +18,7 @@ import { useAuth } from "./auth-provider";
 type ReviewItem = { review: ResearchReview; asset?: Asset };
 
 export function DailyResearchBrief() {
-  const { language, updateUserState, userState } = useApp();
+  const { privateStorage, language, updateUserState, userState } = useApp();
   const { user } = useAuth();
   const zh = language === "zh";
   const reviews = useMemo(() => Object.values(userState.research_reviews || {}).sort((a, b) => new Date(a.due_at).getTime() - new Date(b.due_at).getTime()), [userState.research_reviews]);
@@ -35,7 +35,7 @@ export function DailyResearchBrief() {
   const due = reviews.filter((review) => reviewIsDue(review)).length;
   const next = reviews[0];
   const remove = (symbol: string) => {
-    recordReviewCompletion(localStorage);
+    recordReviewCompletion(privateStorage);
     window.dispatchEvent(new Event("orivane-research-habit"));
     trackEvent("research_review_complete");
     updateUserState((current) => {

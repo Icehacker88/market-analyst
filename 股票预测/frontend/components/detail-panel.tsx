@@ -82,20 +82,6 @@ export function DetailPanel({
   useEffect(() => { setLocalTab(initialTab); }, [initialTab]);
 
   useEffect(() => {
-    if (userState.ai_chats?.[aiChatKey]) return;
-    try {
-      const stored = JSON.parse(localStorage.getItem("orivane-ai-chats-v1") || "{}") as Record<string, Array<Partial<AiChatMessage>>>;
-      const legacy = stored?.[aiChatKey];
-      if (!legacy?.length) return;
-      const migrated = legacy.map((message) => ({
-        ...createChatMessage(message.role === "user" ? "user" : "assistant", String(message.content || "")),
-        ...(message.analysis ? { analysis: message.analysis } : {}),
-      }));
-      setAiMessages(migrated);
-    } catch { /* No legacy chat to migrate. */ }
-  }, [aiChatKey, userState.ai_chats]);
-
-  useEffect(() => {
     if (tab === "research" && !research && !detailLoading.research) loadDetailData(asset.symbol, "research");
     if (tab === "performance" && !performance && !detailLoading.performance) loadDetailData(asset.symbol, "performance");
     if ((tab === "forecast" || tab === "predictionHistory") && !predictions && !detailLoading.predictions) loadDetailData(asset.symbol, "predictions");

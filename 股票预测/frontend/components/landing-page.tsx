@@ -37,7 +37,7 @@ const FALLBACK_POPULAR: Gainer[] = [
 ];
 
 export function LandingPage() {
-  const { favorites, language, t, toggleFavorite, updateUserState, userState } = useApp();
+  const { privateStorage, favorites, language, t, toggleFavorite, updateUserState, userState } = useApp();
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [openResults, setOpenResults] = useState(false);
@@ -73,7 +73,7 @@ export function LandingPage() {
       })
       .finally(() => setGainersLoading(false));
     try {
-      const symbols = JSON.parse(localStorage.getItem("orivane-recent-symbols") || "[]") as string[];
+      const symbols = JSON.parse(privateStorage.getItem("orivane-recent-symbols") || "[]") as string[];
       if (symbols.length) resolveAssets(symbols.slice(0, 4)).then(setRecents).catch(() => undefined);
     } catch { setRecents([]); }
   }, []);
@@ -91,7 +91,7 @@ export function LandingPage() {
 
   function compare(asset: Asset) {
     const seed = recents[0] && recents[0].symbol !== asset.symbol ? [recents[0].symbol] : [];
-    const symbols = addComparisonDraft(localStorage, asset.symbol, seed);
+    const symbols = addComparisonDraft(privateStorage, asset.symbol, seed);
     router.push(dashboardDestination(symbols, { active: asset.symbol, range: "1Y", normalized: true, isolated: null, tab: "priceReturn" }));
   }
 

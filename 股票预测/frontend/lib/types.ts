@@ -258,6 +258,7 @@ export type UserState = {
 };
 
 export type AuthUser = {
+  is_admin?: boolean;
   id: string;
   email: string;
   name?: string;

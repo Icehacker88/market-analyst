@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, AlertTriangle, Database, LockKeyhole, MousePointerClick, RefreshCw, Server } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getMetrics } from "@/lib/api";
 import { isAdminUser } from "@/lib/admin";
 import { formatNumber } from "@/lib/format";
@@ -11,6 +11,12 @@ import { useApp } from "./providers";
 import { ErrorState, LoadingState } from "./states";
 
 export function MonitorPage() {
+  const { loading, user } = useAuth();
+  // Remount on identity/permission changes so old monitoring data cannot survive.
+  return <MonitorContent key={`${user?.id || "guest"}:${loading}:${isAdminUser(user)}`} />;
+}
+
+function MonitorContent() {
   const { language } = useApp();
   const { loading: authLoading, user } = useAuth();
   const [data, setData] = useState<MetricsSummary | null>(null);
@@ -18,18 +24,24 @@ export function MonitorPage() {
   const [error, setError] = useState<string | null>(null);
   const zh = language === "zh";
   const isAdmin = isAdminUser(user);
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => { pending.current?.abort(); }, []);
 
   function load() {
     if (!isAdmin) return;
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
     setLoading(true);
     setError(null);
-    getMetrics()
-      .then(setData)
+    getMetrics({ signal: controller.signal, expectedUserId: user?.id })
+      .then((result) => { if (!controller.signal.aborted) setData(result); })
       .catch((cause) => {
+        if (controller.signal.aborted) return;
         setData(null);
         setError(cause instanceof ApiError && [401, 403].includes(cause.status) ? (zh ? "只有管理员账号可以查看监控。" : "Only admin accounts can view monitoring.") : (zh ? "监控数据暂时不可用。" : "Monitoring data is temporarily unavailable."));
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
   }
 
   useEffect(() => {
