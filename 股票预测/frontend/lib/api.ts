@@ -5,6 +5,23 @@ const SEARCH_CACHE_MS = 30 * 60 * 1000;
 const RESPONSE_CACHE_PREFIX = "orivane-response-v2:";
 const INFLIGHT_GETS = new Map<string, Promise<unknown>>();
 
+// Only homepage public resources publish updates. Private/account requests are untouched.
+export type HomeResponsePath = "/api/home" | "/api/forecast/scoreboard?v=2";
+export type HomeResponseEvent = {
+  status: "loading" | "ready" | "stale" | "error";
+  payload?: unknown;
+};
+const HOME_RESPONSE_LISTENERS = new Map<string, Set<(event: HomeResponseEvent) => void>>();
+export function subscribeHomeResponse(path: HomeResponsePath, listener: (event: HomeResponseEvent) => void): () => void {
+  const listeners = HOME_RESPONSE_LISTENERS.get(path) || new Set();
+  listeners.add(listener);
+  HOME_RESPONSE_LISTENERS.set(path, listeners);
+  return () => { listeners.delete(listener); if (!listeners.size) HOME_RESPONSE_LISTENERS.delete(path); };
+}
+function publishHomeResponse(path: string, event: HomeResponseEvent): void {
+  HOME_RESPONSE_LISTENERS.get(path)?.forEach((listener) => listener(event));
+}
+
 type ResponseCachePolicy = { freshMs: number; staleMs: number };
 type StoredResponse<T> = { value: T; storedAt: number };
 
@@ -140,8 +157,10 @@ async function executeRequest<T>(path: string, init: RequestInit | undefined, st
       throw new ApiError(payload?.error?.message || payload?.detail || "Request failed", response.status);
     }
     if (cacheable) writeResponseCache(path, payload);
+    publishHomeResponse(path, { status: "ready", payload });
     return payload;
   } catch (cause) {
+    publishHomeResponse(path, { status: "error" });
     if (stale !== null) return stale;
     if (timeout?.timedOut()) throw new ApiError("Request timed out", 408);
     throw cause;
@@ -153,18 +172,23 @@ async function executeRequest<T>(path: string, init: RequestInit | undefined, st
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isGet = !init?.method || init.method.toUpperCase() === "GET";
   const policy = isGet && init?.cache !== "no-store" ? responseCachePolicy(path) : null;
-  let cached = policy ? readResponseCache<T>(path, policy) : { fresh: null, stale: null };
-  if (policy && cached.fresh === null && cached.stale === null && typeof window !== "undefined") {
+  const bypassCache = init?.cache === "reload";
+  let cached = policy && !bypassCache ? readResponseCache<T>(path, policy) : { fresh: null, stale: null };
+  if (policy && !bypassCache && cached.fresh === null && cached.stale === null && typeof window !== "undefined") {
     const offline = await readOfflineResponse<T>(path);
     const evaluated = evaluateStoredResponse(offline ? { value: offline.value, storedAt: offline.storedAt } : null, policy);
     cached = { fresh: evaluated.fresh, stale: evaluated.stale };
     if (evaluated.expired) void removeOfflineResponse(path);
   }
-  if (cached.fresh !== null) return cached.fresh;
+  if (cached.fresh !== null) {
+    publishHomeResponse(path, { status: "ready", payload: cached.fresh });
+    return cached.fresh;
+  }
   const privateRequest = ["/api/auth/me", "/api/user/state", "/api/admin/metrics"].includes(path.split("?")[0]);
   const key = !privateRequest && !init?.signal && (isGet || path === "/api/compare")
     ? `${init?.method || "GET"}:${path}:${String(init?.body || "")}` : "";
   if (cached.stale !== null) {
+    publishHomeResponse(path, { status: "stale", payload: cached.stale });
     if (!key || !INFLIGHT_GETS.has(key)) {
       const refresh = executeRequest<T>(path, init, null, Boolean(policy));
       if (key) INFLIGHT_GETS.set(key, refresh);
@@ -174,6 +198,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     return cached.stale;
   }
+  publishHomeResponse(path, { status: "loading" });
   if (key && INFLIGHT_GETS.has(key)) return INFLIGHT_GETS.get(key) as Promise<T>;
   const pending = executeRequest(path, init, cached.stale, Boolean(policy));
   if (key) INFLIGHT_GETS.set(key, pending);
@@ -267,12 +292,12 @@ export async function getMarketOverview(): Promise<MarketOverview> {
   return (await request<{ data: MarketOverview }>("/api/market/overview")).data;
 }
 
-export async function getHomeData(): Promise<HomeData> {
-  return (await request<{ data: HomeData }>("/api/home")).data;
+export async function getHomeData(refresh = false): Promise<HomeData> {
+  return (await request<{ data: HomeData }>("/api/home", refresh ? { cache: "reload" } : undefined)).data;
 }
 
-export async function getForecastScoreboard(): Promise<ForecastScoreboard> {
-  return (await request<{ data: ForecastScoreboard }>("/api/forecast/scoreboard?v=2")).data;
+export async function getForecastScoreboard(refresh = false): Promise<ForecastScoreboard> {
+  return (await request<{ data: ForecastScoreboard }>("/api/forecast/scoreboard?v=2", refresh ? { cache: "reload" } : undefined)).data;
 }
 
 export async function getScreener(): Promise<ScreenerRow[]> {
