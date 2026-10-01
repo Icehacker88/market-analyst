@@ -7,3 +7,5 @@ This checkout is for UI/product work on `codex/ui-preview-ff7fd40d`, based on so
 Authentication/password development is frozen. Preserve existing deployed password, OAuth, session, administrator authorization, account isolation and Production configuration. Do not merge/cherry-pick `codex/auth-admin-frozen-20260930` or copy files/build output from the original dirty checkout. A separate explicit user instruction is required to reopen auth work.
 
 Before a separately authorized Preview deployment, review the complete diff against `codex/preview-ff7fd40d-source`, verify frozen auth/config files and generated Worker, use only this checkout, confirm the Preview branch and all six isolated KV bindings, and skip SEO refresh. Do not use default deployment target inference, Production deployment, or optimizer/all deployment commands. Never deploy simply because code was committed.
+
+Product development cadence: one explicitly bounded round, one reviewed commit, then separately authorized Preview acceptance before the next round. Keep this worktree clean between rounds.

@@ -41,3 +41,11 @@ export function assetTypeLabels(asset: Asset, language: "zh" | "en"): string[] {
   }
   return labels;
 }
+
+// Rank only unique, valid 1Y candidates actually returned by /api/home.
+// It cannot establish rank or coverage outside this filtered, capped list.
+export function yearCandidateRank(asset: HomeCandidate, rows: HomeCandidate[]) {
+  const valid = [...new Map(rows.filter((row) => typeof row.return_1y === "number" && Number.isFinite(row.return_1y)).map((row) => [row.symbol, row])).values()];
+  if (!valid.some((row) => row.symbol === asset.symbol) || typeof asset.return_1y !== "number" || !Number.isFinite(asset.return_1y)) return null;
+  return { rank: 1 + valid.filter((row) => row.return_1y! > asset.return_1y!).length, total: valid.length, tied: valid.filter((row) => row.return_1y === asset.return_1y).length > 1 };
+}

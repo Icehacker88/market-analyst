@@ -76,6 +76,8 @@ describe("homepage data semantics and refresh", () => {
   it("switches perspectives without API calls and preserves research/follow actions", async () => {
     vi.mocked(fetch).mockResolvedValue(response(1));
     render(<HomeDiscovery />);
+    expect(await screen.findByText("1Y 候选内 #1 / 1")).toBeVisible();
+    expect(screen.getByText(/本视角 1 只候选/)).toBeVisible();
     expect(await screen.findByRole("link", { name: "查看研究" })).toHaveAttribute("href", expect.stringMatching(/^\/stocks\/mu\/?$/));
     fireEvent.click(screen.getByRole("button", { name: "关注 MU" }));
     expect(follow).toHaveBeenCalledWith(expect.objectContaining({ symbol: "MU" }));
@@ -86,6 +88,17 @@ describe("homepage data semantics and refresh", () => {
 });
 
 describe("homepage search", () => {
+  it("keeps Netflix out of ETF results after remote enrichment", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({results: [{symbol: "NFLX", name: "Netflix", asset_type: "stock", data_source: "yahoo"}]})));
+    render(<HomeSearch />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ETF" } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("条结果"));
+    expect(screen.getByRole("grid")).not.toHaveTextContent("NFLX");
+    expect(screen.queryByRole("button", {name: "更多操作 NFLX"})).not.toBeInTheDocument();
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(0);
+  });
+
   it("keeps explicit ETF, leveraged and inverse labels", () => {
     expect(assetTypeLabels({ ...asset, asset_type: "etf", name: "Example 3x Inverse ETF" }, "zh")).toEqual(["ETF", "杠杆", "反向"]);
     expect(assetTypeLabels({ ...asset, name: "Short Company" }, "zh")).toEqual(["股票"]);

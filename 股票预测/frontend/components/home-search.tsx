@@ -27,7 +27,7 @@ export function HomeSearch() {
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const gridId = `${id}-results`;
-  const { results, remoteLoading, remoteComplete, error } = useAssetSearch(query);
+  const { results, remoteLoading, remoteComplete, error } = useAssetSearch(query, 180, true);
   const rows = filterBySearchGroup(results, group).slice(0, 20);
   const groups = searchGroups(results, language);
   const expanded = open && Boolean(query.trim());
@@ -50,7 +50,7 @@ export function HomeSearch() {
       if (!root.current) return;
       const bounds = root.current.getBoundingClientRect();
       const available = (viewport?.height || window.innerHeight) - Math.max(0, bounds.bottom - (viewport?.offsetTop || 0));
-      root.current.style.setProperty("--results-height", `${Math.max(120, available - (window.innerWidth <= 600 ? 88 : 24))}px`);
+      root.current.style.setProperty("--results-height", `${Math.max(120, available - (window.innerWidth <= 960 ? 88 : 24))}px`);
     };
     measure();
     viewport?.addEventListener("resize", measure);
