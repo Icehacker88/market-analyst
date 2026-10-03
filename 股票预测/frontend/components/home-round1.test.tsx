@@ -128,6 +128,24 @@ describe("homepage search", () => {
     Element.prototype.scrollIntoView = original;
   });
 
+  it.each(["trigger", "menu", "result", "input"])("Escape from %s closes more and restores its trigger without changing selection", async (target) => {
+    render(<HomeSearch />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "NVDA" } });
+    const trigger = await screen.findByRole("button", { name: "更多操作 NVDA" });
+    fireEvent.click(trigger);
+    const activeId = input.getAttribute("aria-activedescendant");
+    const focus = target === "trigger" ? trigger : target === "menu" ? screen.getByRole("button", { name: "加入对比" }) : target === "input" ? input : within(screen.getByRole("row")).getAllByRole("button")[0];
+    act(() => focus.focus());
+    fireEvent.keyDown(focus, { key: "Escape" });
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "加入对比" })).not.toBeInTheDocument();
+    expect(screen.getByRole("grid")).toBeVisible();
+    expect(input).toHaveAttribute("aria-activedescendant", activeId);
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("uses the whole main result to open research and keeps secondary actions in more", async () => {
     render(<HomeSearch />);
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "NVDA" } });

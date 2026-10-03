@@ -1,11 +1,10 @@
 "use client";
 
 import { ChartNoAxesCombined } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Asset } from "@/lib/types";
 
-const REMOTE_LOGO_REVISION = "20260902";
-const MAX_REMOTE_LOGO_RETRIES = 2;
+import { loadAssetLogo } from "@/lib/asset-logo";
 
 export const LOCAL_ASSET_LOGOS: Record<string, string> = {
   QQQ: "/logos/qqq.svg",
@@ -26,32 +25,49 @@ export const LOCAL_ASSET_LOGOS: Record<string, string> = {
 export const REMOTE_LOGO_UNAVAILABLE = new Set(["301396.SZ"]);
 
 export function AssetLogo({ asset, size = "medium" }: { asset: Asset; size?: "small" | "medium" | "large" }) {
-  const [failed, setFailed] = useState(false);
-  const [retry, setRetry] = useState(0);
+  const root = useRef<HTMLSpanElement>(null);
+  const [failedSymbol, setFailedSymbol] = useState<string | null>(null);
+  const [remote, setRemote] = useState<{ symbol: string; url: string } | null>(null);
   const localLogo = LOCAL_ASSET_LOGOS[asset.symbol];
-  const showLogo = Boolean(localLogo || (["stock", "etf"].includes(asset.asset_type) && !REMOTE_LOGO_UNAVAILABLE.has(asset.symbol))) && !failed;
-  const logoSource = localLogo || `/api/assets/logo?symbol=${encodeURIComponent(asset.symbol)}&v=${REMOTE_LOGO_REVISION}&retry=${retry}`;
+  const eligible = ["stock", "etf"].includes(asset.asset_type) && !REMOTE_LOGO_UNAVAILABLE.has(asset.symbol);
+  const logoSource = localLogo || (remote?.symbol === asset.symbol ? remote.url : undefined);
 
   useEffect(() => {
-    setFailed(false);
-    setRetry(0);
-  }, [asset.symbol]);
+    setFailedSymbol(null);
+    if (localLogo || !eligible) return;
+    let disposed = false;
+    let objectUrl: string | undefined;
+    let started = false;
+    const load = () => {
+      if (started) return;
+      started = true;
+      void loadAssetLogo(asset.symbol).then((blob) => {
+        if (disposed || !blob) return;
+        objectUrl = URL.createObjectURL(blob);
+        setRemote({ symbol: asset.symbol, url: objectUrl });
+      });
+    };
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) { observer?.disconnect(); load(); }
+    }, { rootMargin: "200px" });
+    if (observer && root.current) observer.observe(root.current);
+    else load();
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [asset.symbol, localLogo, eligible]);
 
   return (
-    <span className={`asset-logo ${size}`} aria-hidden="true">
+    <span ref={root} className={`asset-logo ${size}`} aria-hidden="true">
       <ChartNoAxesCombined />
-      {showLogo && <img
+      {logoSource && failedSymbol !== asset.symbol && <img
         src={logoSource}
         alt=""
         loading="lazy"
         decoding="async"
-        onError={() => {
-          if (!localLogo && retry < MAX_REMOTE_LOGO_RETRIES) {
-            setRetry((current) => current + 1);
-            return;
-          }
-          setFailed(true);
-        }}
+        onError={() => setFailedSymbol(asset.symbol)}
       />}
     </span>
   );

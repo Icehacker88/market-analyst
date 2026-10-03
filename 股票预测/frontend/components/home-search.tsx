@@ -84,7 +84,14 @@ export function HomeSearch() {
     : remoteLoading || (!remoteComplete && !rows.length) ? (zh ? "正在补充搜索结果…" : "Loading more search results…")
       : !rows.length ? (zh ? "没有匹配资产，请尝试代码或公司名。" : "No matching assets. Try a symbol or company name.")
         : (zh ? `${rows.length} 条结果，方向键选择，回车查看研究。` : `${rows.length} results. Arrow keys to choose, Enter to research.`);
-  return <div className={s.search} ref={root} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setMore(null); } }}>
+  return <div className={s.search} ref={root} onKeyDownCapture={(event) => {
+    if (event.key !== "Escape" || !more || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const index = rows.findIndex((asset) => asset.symbol === more);
+    setMore(null);
+    if (index >= 0) document.getElementById(`${id}-more-${index}`)?.focus();
+  }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setMore(null); } }}>
     <label className={s.searchLabel} htmlFor={`${id}-input`}>{zh ? "搜索资产，开始研究" : "Search an asset to start researching"}</label>
     <div className={s.searchInput}><Search size={21} aria-hidden="true" /><input id={`${id}-input`} ref={input} role="combobox" aria-label={zh ? "搜索资产" : "Search assets"} aria-haspopup="grid" aria-expanded={expanded} aria-controls={expanded ? gridId : undefined} aria-activedescendant={expanded && selected >= 0 ? rowId(selected) : undefined} aria-autocomplete="list" autoComplete="off" autoCapitalize="off" spellCheck={false} value={query} placeholder={zh ? "股票 / ETF / 基金名称或代码" : "Stock / ETF / fund name or symbol"} onKeyDown={onKeyDown} onFocus={() => query.trim() && setOpen(true)} onChange={(event) => { setQuery(event.target.value); setGroup("all"); setActive(0); setMore(null); setOpen(Boolean(event.target.value.trim())); }} />{query && <button type="button" aria-label={zh ? "清空搜索" : "Clear search"} onClick={() => { setQuery(""); setOpen(false); setMore(null); input.current?.focus(); }}><X size={17} /></button>}</div>
     {expanded && <div className={s.searchPopover}>
@@ -93,7 +100,7 @@ export function HomeSearch() {
         {rows.map((asset, index) => <div className={s.resultRow} role="row" aria-selected={selected === index} id={rowId(index)} key={asset.symbol}>
           <div role="gridcell" className={s.resultCell}><button type="button" className={s.resultMain} onClick={() => navigate(asset)}><AssetLogo asset={asset} size="small" /><span><strong>{displayAssetName(asset, language) || asset.symbol}</strong><small>{asset.symbol} · {asset.exchange || asset.data_source}</small><span className={s.badges}>{assetTypeLabels(asset, language).map((label) => <em key={label}>{label}</em>)}</span></span></button></div>
           <div role="gridcell" className={s.moreCell}><button type="button" id={`${id}-more-${index}`} aria-label={`${zh ? "更多操作" : "More actions"} ${asset.symbol}`} aria-expanded={more === asset.symbol} aria-controls={more === asset.symbol ? `${id}-actions-${index}` : undefined} onClick={() => { setActive(index); setMore(more === asset.symbol ? null : asset.symbol); }}><MoreHorizontal size={19} /></button></div>
-          {more === asset.symbol && <div role="gridcell" className={s.moreActions} id={`${id}-actions-${index}`} onKeyDown={(event) => { if (event.key === "Escape") { setMore(null); document.getElementById(`${id}-more-${index}`)?.focus(); } }}><button type="button" onClick={() => compare(asset)}><Plus size={14} />{zh ? "加入对比" : "Compare"}</button><button type="button" onClick={() => { setOpen(false); router.push(`/favorites/?alert=${encodeURIComponent(asset.symbol)}`); }}><Bell size={14} />{zh ? "设置提醒" : "Set alert"}</button></div>}
+          {more === asset.symbol && <div role="gridcell" className={s.moreActions} id={`${id}-actions-${index}`}><button type="button" onClick={() => compare(asset)}><Plus size={14} />{zh ? "加入对比" : "Compare"}</button><button type="button" onClick={() => { setOpen(false); router.push(`/favorites/?alert=${encodeURIComponent(asset.symbol)}`); }}><Bell size={14} />{zh ? "设置提醒" : "Set alert"}</button></div>}
         </div>)}
       </div>
       <p className={`${s.searchStatus} ${error ? s.warning : ""}`} role="status" aria-live="polite" aria-atomic="true">{status}</p>
