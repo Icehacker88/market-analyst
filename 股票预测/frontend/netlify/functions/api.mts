@@ -5595,8 +5595,10 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (request.method === "POST" && path === "/assets/resolve") {
     const symbols = (await parseBody(request)).symbols;
     if (!Array.isArray(symbols)) return error(422, "validation_error", "Symbols must be an array.");
-    const resolved = await Promise.all(symbols.map((item) => resolveAsset(String(item))));
-    const assets = [...new Map(resolved.map((asset) => [asset.symbol, asset])).values()].slice(0, MAX_COMPARE_ASSETS);
+    const requested = [...new Set(symbols.map((item) => String(item).trim().toUpperCase()).filter(Boolean))];
+    const resolved = await Promise.all(requested.map((symbol) => resolveAsset(symbol)));
+    // Watchlists use this general resolver; only /compare owns the comparison limit.
+    const assets = [...new Map(resolved.map((asset) => [asset.symbol, asset])).values()];
     return json({ assets });
   }
   if (request.method === "GET" && path === "/market/history") {
