@@ -44,7 +44,7 @@ export function useMyResearch(inputSymbols: string[]) {
 
   useEffect(() => {
     if (state.key !== key || state.loading) return;
-    const expirations = Object.values(state.entries).filter((entry) => entry.status === "fresh" && entry.checkedAt).map((entry) => entry.checkedAt! + RESEARCH_FRESH_MS);
+    const expirations = Object.values(state.entries).filter((entry) => entry.status === "fresh" && entry.checkedAt).map((entry) => entry.freshUntil || entry.checkedAt! + RESEARCH_FRESH_MS);
     if (!expirations.length) return;
     const timer = window.setTimeout(() => setResumeVersion((value) => value + 1), Math.max(1, Math.min(...expirations) - Date.now() + 1));
     return () => window.clearTimeout(timer);

@@ -114,6 +114,7 @@ const EDGE_CACHE_PATHS = new Set([
 
 function edgeCacheable(request: Request): boolean {
   if (request.method !== "GET" || request.headers.has("authorization")) return false;
+  if (new URL(request.url).pathname === "/api/market/snapshot" && new URL(request.url).searchParams.has("mode")) return false;
   const path = new URL(request.url).pathname.replace(/\\/$/, "");
   return EDGE_CACHE_PATHS.has(path)
     || path === "/api/assets/search"

@@ -2,15 +2,8 @@ import type { AlertHistory, Asset, Forecast, History, PriceAlert, ResearchReview
 
 export type ResearchBaseline = NonNullable<UserState["forecast_snapshots"]>;
 export type ResearchSnapshot = ResearchBaseline[string];
-export type ResearchDataEntry = {
-  asset?: Asset;
-  history?: History;
-  forecast?: Forecast;
-  errors: Array<{ kind: string; message: string }>;
-  status: "loading" | "fresh" | "stale" | "failed" | "unchecked";
-  checkedAt?: number;
-  dataStatus?: "fresh" | "stale";
-};
+export type { ResearchDataEntry } from "./my-research-data";
+import type { ResearchDataEntry } from "./my-research-data";
 export type ResearchEntries = Record<string, ResearchDataEntry>;
 export type ResearchReason =
   | { id: string; kind: "review_due"; review: ResearchReview }
@@ -28,7 +21,10 @@ export type ResearchCoverage = {
   resolved: number;
   checked: number;
   failed: number;
-  /** Loading is a subset of unchecked. Checked, failed, stale and unchecked partition total. */
+  partial: number;
+  unavailable: number;
+  queried: number;
+  /** Loading is a subset of unchecked. Checked, failed, partial, unavailable, stale and unchecked partition total. */
   unchecked: number;
   loading: number;
   stale: number;
@@ -109,11 +105,12 @@ function directionReversed(previous: ResearchSnapshot, current: ResearchSnapshot
 }
 
 export function deriveResearchCoverage(symbols: readonly string[], entries: ResearchEntries, baseline: ResearchBaseline = {}): ResearchCoverage {
-  const coverage: ResearchCoverage = { total: 0, resolved: 0, checked: 0, failed: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 };
+  const coverage: ResearchCoverage = { total: 0, resolved: 0, checked: 0, failed: 0, partial: 0, unavailable: 0, queried: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 };
   for (const symbol of researchSymbols(symbols)) {
     coverage.total += 1;
     const entry = entries[symbol];
     if (entry?.asset) coverage.resolved += 1;
+    if (entry?.queryCompleted) coverage.queried += 1;
     const current = entry && researchSnapshot(entry);
     if (current) {
       coverage.checked += 1;
@@ -121,6 +118,8 @@ export function deriveResearchCoverage(symbols: readonly string[], entries: Rese
       if (!validSnapshot(previous)) coverage.noBaseline += 1;
       else if (!directionReversed(previous, current)) coverage.unchanged += 1;
     } else if (entry?.status === "failed" || entry?.status === "fresh") coverage.failed += 1;
+    else if (entry?.status === "partial") coverage.partial += 1;
+    else if (entry?.status === "unavailable") coverage.unavailable += 1;
     else if (entry?.status === "stale") coverage.stale += 1;
     else {
       coverage.unchecked += 1;

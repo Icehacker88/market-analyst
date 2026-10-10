@@ -1,3 +1,4 @@
+import { withReadOnlyMetadata } from "../tests/fixtures/research-snapshot";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Forecast, MarketSnapshot } from "@/lib/types";
@@ -11,12 +12,12 @@ vi.mock("@/lib/offline-store", () => ({
 }));
 
 function snapshot(symbol: string, price: number): MarketSnapshot {
-  return {
+  return withReadOnlyMetadata({
     asset: { symbol, name: symbol, asset_type: "stock", data_source: "yahoo" },
     history: { symbol, data_source: "yahoo", data_as_of: "2026-10-04", snapshot: { latest_price: price }, records: [] },
-    forecast: { symbol, signal: "Up", base_price: price, data_as_of: "2026-10-04" } as Forecast,
+    forecast: { symbol, signal: "Up", base_price: price, forecast_1m_return: 0.05, data_as_of: "2026-10-04" } as Forecast,
     errors: [],
-  };
+  });
 }
 
 afterEach(() => { vi.unstubAllGlobals(); cache.stored = null; });

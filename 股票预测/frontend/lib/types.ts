@@ -310,11 +310,30 @@ export type History = {
   records: HistoryRecord[];
 };
 
+/** Source age is independent of the browser response-cache age. */
+export type ReadOnlySnapshotSource = {
+  source: "history_cache" | "frozen_forecast";
+  status: "available" | "stale" | "unavailable" | "failed";
+  data_as_of: string | null;
+  stored_at: string | null;
+  generated_at: string | null;
+  expires_at: number | null;
+  reason?: string;
+};
+export type ReadOnlySnapshotMetadata = {
+  version: 1;
+  queried_at: string;
+  query_status: "complete" | "failed";
+  history: ReadOnlySnapshotSource;
+  forecast: ReadOnlySnapshotSource;
+};
+
 export type MarketSnapshot = {
   asset: Asset;
   history?: History;
   forecast?: Forecast;
-  errors: Array<{ kind: "history" | "forecast" | "asset"; message: string }>;
+  errors: Array<{ kind: "history" | "forecast" | "asset"; message: string; code?: string }>;
+  read_only?: ReadOnlySnapshotMetadata;
 };
 
 export type CompareSeries = {

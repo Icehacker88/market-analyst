@@ -5187,8 +5187,7 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>): Record<st
 
 async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string | null): Promise<Record<string, unknown> | null> {
   const memory = MEMORY_FORECASTS.get(symbol.toUpperCase()) || null;
-  const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
-  const stored = await store.get(forecastKey(symbol), { type: "json" }).catch(() => null) as Record<string, unknown> | null;
+  const stored = await readStoredForecast(symbol).catch(() => null);
   const cached = memory || stored;
   const generatedAt = typeof cached?.generated_at === "string" ? new Date(cached.generated_at).getTime() : 0;
   if (!cached || !generatedAt || Date.now() - generatedAt > FORECAST_CACHE_MAX_AGE_MS) return null;
@@ -5506,6 +5505,111 @@ async function generateAndFreezeCloudForecast(symbol: string, optimize = true): 
   return freezeCloudForecast(String(forecast.symbol || symbol), forecast);
 }
 
+// Pure storage read shared with the legacy reader. No validation fetch, ledger, or writes.
+function readStoredForecast(symbol: string): Promise<Record<string, unknown> | null> {
+  const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
+  return store.get(forecastKey(symbol), { type: "json" }) as Promise<Record<string, unknown> | null>;
+}
+
+type ReadOnlySource = {
+  source: "history_cache" | "frozen_forecast";
+  status: "available" | "stale" | "unavailable" | "failed";
+  data_as_of: string | null;
+  stored_at: string | null;
+  generated_at: string | null;
+  expires_at: number | null;
+  reason?: string;
+};
+
+async function readOnlyMarketSnapshot(symbol: string): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  const dateValid = (value: unknown): value is string => typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString().slice(0, 10) === value && value <= new Date(now).toISOString().slice(0, 10);
+  const base = (source: ReadOnlySource["source"]): ReadOnlySource => ({ source, status: "unavailable", data_as_of: null, stored_at: null, generated_at: null, expires_at: null });
+  const catalog = CATALOG.find((item) => item.symbol === symbol);
+  let asset = catalog || inferAsset(symbol);
+  const historyMeta = base("history_cache");
+  const forecastMeta = base("frozen_forecast");
+  const errors: Array<{ kind: "history" | "forecast"; code: string; message: string }> = [];
+  let history: Record<string, unknown> | undefined;
+  let forecast: Record<string, unknown> | undefined;
+  let storedForecast: Record<string, unknown> | undefined;
+  // A recent cache write is not proof that the underlying observations are recent.
+  // Four UTC calendar days allows weekends; this is a conservative age cap, not a trading calendar.
+  const observationExpiry = (date: string) => Date.parse(`${date}T23:59:59.999Z`) + 4 * 86400_000;
+  await Promise.all([
+    (async () => {
+      try {
+        const store = getStore({ name: "orivane-api-cache" });
+        // Existing cache keys include type. For uncatalogued Yahoo tickers, probe only
+        // the common stored types; never resolve over the network or calculate history.
+        const types = catalog || asset.asset_type !== "market" ? [asset.asset_type] : ["market", "stock", "etf"] as Asset["asset_type"][];
+        let cached: CacheEntry<Record<string, unknown>> | null = null;
+        for (const type of types) {
+          cached = await store.get(cacheKey(`history-v5/recent-${new Date(now).getUTCFullYear() - 4}/${symbol}/${asset.data_source}/${type}`), { type: "json" }) as CacheEntry<Record<string, unknown>> | null;
+          if (cached) { asset = { ...asset, asset_type: type }; break; }
+        }
+        if (!cached) { historyMeta.reason = "not_cached"; return; }
+        const value = cached.value;
+        const snapshot = value?.snapshot as Record<string, unknown> | undefined;
+        if (value?.symbol !== symbol || value?.data_source !== asset.data_source || !dateValid(value?.data_as_of)
+          || typeof snapshot?.latest_price !== "number" || !Number.isFinite(snapshot.latest_price) || snapshot.latest_price <= 0) throw new Error("Invalid stored history.");
+        const storedAt = Date.parse(cached.stored_at);
+        const expiresAt = Math.min(cached.expires_at, storedAt + 30 * 60_000, observationExpiry(value.data_as_of));
+        const validAge = Number.isFinite(storedAt) && storedAt <= now && Number.isFinite(cached.expires_at) && cached.expires_at > storedAt;
+        Object.assign(historyMeta, { data_as_of: value.data_as_of, stored_at: validAge ? cached.stored_at : null, expires_at: validAge ? expiresAt : null,
+          status: validAge && expiresAt > now ? "available" : "stale", reason: validAge ? expiresAt > now ? undefined : "cache_expired" : "unknown_cache_age" });
+        const numberOrNull = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
+        history = { symbol, data_source: value.data_source, data_as_of: value.data_as_of, records: [], snapshot: {
+          latest_price: snapshot.latest_price, return_1d: numberOrNull(snapshot.return_1d),
+          annualized_volatility_20d: numberOrNull(snapshot.annualized_volatility_20d),
+        } };
+      } catch {
+        historyMeta.status = "failed"; historyMeta.reason = "cache_read_or_validation_failed";
+      }
+    })(),
+    (async () => {
+      try {
+        const value = await readStoredForecast(symbol);
+        if (!value) { forecastMeta.reason = "not_cached"; return; }
+        if (value.symbol !== symbol || !dateValid(value.data_as_of) || !["Up", "Down", "Observe"].includes(String(value.signal))
+          || typeof value.forecast_1m_return !== "number" || !Number.isFinite(value.forecast_1m_return)) throw new Error("Invalid stored forecast.");
+        const generatedAt = typeof value.generated_at === "string" ? Date.parse(value.generated_at) : NaN;
+        const validAge = Number.isFinite(generatedAt) && generatedAt <= now;
+        const expiresAt = validAge ? Math.min(generatedAt + FORECAST_CACHE_MAX_AGE_MS, observationExpiry(value.data_as_of as string)) : null;
+        Object.assign(forecastMeta, { data_as_of: value.data_as_of, generated_at: validAge ? value.generated_at : null, expires_at: expiresAt,
+          status: expiresAt && expiresAt > now ? "available" : "stale", reason: validAge ? expiresAt! > now ? undefined : "forecast_expired" : "unknown_generation_time" });
+        storedForecast = value;
+      } catch {
+        forecastMeta.status = "failed"; forecastMeta.reason = "cache_read_or_validation_failed";
+      }
+    })(),
+  ]);
+  if (forecastMeta.status === "available" && historyMeta.data_as_of && forecastMeta.data_as_of !== historyMeta.data_as_of) {
+    forecastMeta.status = "stale"; forecastMeta.reason = "market_date_mismatch";
+  }
+  if (storedForecast) {
+    try {
+      // The guard is pure, but may assume freshness. Only apply it to complete, aligned sources.
+      const guarded = historyMeta.status === "available" && forecastMeta.status === "available"
+        ? applyCurrentForecastGuard(storedForecast) : storedForecast;
+      const levels = guarded.key_levels as Record<string, unknown> | undefined;
+      forecast = { symbol, data_as_of: storedForecast.data_as_of, generated_at: forecastMeta.generated_at, signal: guarded.signal,
+        forecast_1m_return: storedForecast.forecast_1m_return, confidence_score: toNumber(storedForecast.confidence_score),
+        key_levels: { invalidation: toNumber(levels?.invalidation) } };
+    } catch {
+      forecastMeta.status = "failed"; forecastMeta.reason = "stored_forecast_guard_failed";
+    }
+  }
+  for (const [kind, meta] of [["history", historyMeta], ["forecast", forecastMeta]] as const) {
+    if (meta.status === "failed" || meta.status === "unavailable") errors.push({ kind, code: meta.status, message: meta.reason || meta.status });
+  }
+  return { asset, ...(history ? { history } : {}), ...(forecast ? { forecast } : {}), errors,
+    read_only: { version: 1, queried_at: new Date(now).toISOString(), query_status: [historyMeta, forecastMeta].some((m) => m.status === "failed") ? "failed" : "complete",
+      history: historyMeta, forecast: forecastMeta } };
+}
+
 async function marketSnapshots(symbols: string[], start: string, view: "full" | "lite", include: "all" | "history" | "forecast"): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   for (let offset = 0; offset < symbols.length; offset += 4) {
@@ -5614,6 +5718,14 @@ async function route(request: Request, context: Context): Promise<Response> {
     }
   }
   if (request.method === "GET" && path === "/market/snapshot") {
+    const mode = url.searchParams.get("mode");
+    if (mode !== null) {
+      if (mode !== "read-only") return error(422, "validation_error", "Unknown snapshot mode.");
+      const symbols = [...new Set(String(url.searchParams.get("symbols") || "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean))];
+      if (!symbols.length || symbols.length > 4 || symbols.some((symbol) => !/^[A-Z0-9.^=-]{1,32}$/.test(symbol))) return error(422, "validation_error", "Read-only snapshots require 1–4 valid symbols.");
+      // Separate mode/URL; no batch cache, no metric writes, no hidden loader fallback.
+      return new Response(JSON.stringify({ data: await Promise.all(symbols.map(readOnlyMarketSnapshot)) }), { headers: PRIVATE_HEADERS });
+    }
     const symbols = [...new Set(String(url.searchParams.get("symbols") || "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean))].slice(0, 20);
     const start = /^\d{4}-\d{2}-\d{2}$/.test(String(url.searchParams.get("start") || "")) ? String(url.searchParams.get("start")) : "2025-01-01";
     const view = url.searchParams.get("view") === "full" ? "full" : "lite";
@@ -5739,16 +5851,17 @@ async function route(request: Request, context: Context): Promise<Response> {
 const handle = async (request: Request, context: Context): Promise<Response> => {
   const started = Date.now();
   const url = new URL(request.url);
+  const readOnlySnapshot = request.method === "GET" && url.searchParams.get("mode") === "read-only" && /^\/(?:api|\.netlify\/functions\/api)\/market\/snapshot$/.test(url.pathname);
   const metricPath = `${request.method} ${url.pathname.replace(/^\/(?:api|\.netlify\/functions\/api)/, "") || "/"}`;
   try {
     const response = await route(request, context);
-    if (shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
+    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
       context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     }
     return response;
   } catch (cause) {
     const response = error(500, "internal_error", cause instanceof Error ? cause.message : "Unexpected error.");
-    if (shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
+    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     return response;
   }
 };

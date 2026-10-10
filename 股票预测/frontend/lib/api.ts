@@ -451,9 +451,9 @@ export async function getMarketSnapshots(
 
 // My Research owns its observable cache and loads bounded batches progressively.
 // Keep this opt-in transport separate from the existing snapshot consumers.
-export function researchSnapshotPath(symbols: string[], start: string): string {
+export function researchSnapshotPath(symbols: string[], _start?: string): string {
   if (!symbols.length || symbols.length > 4) throw new Error("Research snapshot batches require 1–4 assets.");
-  const params = new URLSearchParams({ symbols: symbols.join(","), start, view: "lite", include: "all", v: "1" });
+  const params = new URLSearchParams({ symbols: symbols.join(","), mode: "read-only", v: "2" });
   return `/api/market/snapshot?${params}`;
 }
 

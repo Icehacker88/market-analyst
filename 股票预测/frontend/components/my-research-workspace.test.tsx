@@ -86,6 +86,19 @@ describe("My Research visible reliability and action queue", () => {
     expect(screen.getByText(/1 项缓存待更新/)).toBeInTheDocument();
     expect(screen.getByText(/尚不能确认全部关注资产的变化/)).toBeInTheDocument();
   });
+  it("separates completed read queries from complete comparisons and missing data", () => {
+    watchlist(5);
+    state.entries.ASSET0 = { ...entry("ASSET0"), status: "partial", forecast: undefined, queryCompleted: true };
+    state.entries.ASSET1 = { ...entry("ASSET1"), status: "unavailable", history: undefined, forecast: undefined, queryCompleted: true };
+    for (const symbol of ["ASSET2", "ASSET3", "ASSET4"]) state.entries[symbol].queryCompleted = true;
+    renderWorkspace();
+    expect(screen.getByText("已检查 3/5")).toBeInTheDocument();
+    expect(screen.getByText(/只读查询完成 5\/5/)).toBeInTheDocument();
+    expect(screen.getByText(/1 项部分可用/)).toBeInTheDocument();
+    expect(screen.getByText(/1 项无存储数据/)).toBeInTheDocument();
+    expect(screen.queryByText(/暂无需要处理的重要变化/)).not.toBeInTheDocument();
+    expect(screen.getByText(/刷新只重读已有存储/)).toBeInTheDocument();
+  });
   it("has an actionable new-user empty state without fake progress or completion", () => {
     renderWorkspace();
     expect(screen.getByRole("link", { name: /查找资产/ })).toHaveAttribute("href", "/");
