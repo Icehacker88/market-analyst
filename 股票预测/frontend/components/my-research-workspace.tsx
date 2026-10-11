@@ -5,7 +5,7 @@ import { ArrowRight, Bell, BookmarkX, RefreshCw } from "lucide-react";
 import { assetPath, catalogAssetBySymbol } from "@/lib/asset-catalog";
 import { canonicalSymbol, displayAssetName } from "@/lib/assets";
 import { formatNumber, formatPercent } from "@/lib/format";
-import { buildResearchQueue, completeResearchEntry, deriveResearchCoverage, readResearchBaseline, seedResearchBaseline, writeResearchBaseline, type ResearchReason } from "@/lib/my-research";
+import { buildResearchQueue, researchSemantics, deriveResearchCoverage, readResearchBaseline, seedResearchBaseline, writeResearchBaseline, type ResearchReason, type ResearchDataEntry } from "@/lib/my-research";
 import type { Asset, PriceAlert, ResearchReview } from "@/lib/types";
 import { AppLink as Link } from "./app-link";
 import { AssetLogo } from "./asset-logo";
@@ -46,11 +46,13 @@ export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: 
   const tasks = buildResearchQueue({ symbols, reviews: userState.research_reviews, alerts: userState.alerts, alertHistory: userState.alert_history, baseline, entries, now: new Date(now) });
   const assetBySymbol = useMemo(() => new Map(favorites.map((asset) => [asset.symbol, asset])), [favorites]);
   const identity = (symbol: string) => entries[symbol]?.asset || assetBySymbol.get(symbol) || catalogAssetBySymbol(symbol);
-  const { checked, failed, stale, unchecked, partial, unavailable, queried } = deriveResearchCoverage(symbols, entries, baseline);
+  // Receipt can be later than the last minute tick; use the current render clock for ages.
+  const displayNow = Date.now();
+  const { checked, failed, stale, unchecked, complete, partial, unavailable, processed } = deriveResearchCoverage(symbols, entries, baseline, displayNow);
   const resolved = symbols.filter((symbol) => Boolean(identity(symbol)?.name)).length;
   const noBaseline = symbols.filter((symbol) => !baseline[symbol] || newBaselines.includes(symbol)).length;
   const taskSymbols = new Set(tasks.map((task) => task.symbol));
-  const unconfirmed = failed + stale + unchecked + partial + unavailable;
+  const unconfirmed = symbols.length - checked;
   const removeFavorite = (symbol: string) => {
     const favorite = assetBySymbol.get(symbol);
     if (favorite) toggleFavorite(favorite);
@@ -63,11 +65,14 @@ export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: 
 
   return <div className={s.workspace}>
     <div className={s.coverage}>
-      <div role="status" aria-live="polite"><strong>{zh ? `已检查 ${checked}/${symbols.length}` : `Checked ${checked}/${symbols.length}`}{failed > 0 && <span className={s.warning}>{zh ? ` · ${failed} 项获取失败` : ` · ${failed} failed`}</span>}{stale > 0 && <span className={s.warning}>{zh ? ` · ${stale} 项缓存待更新` : ` · ${stale} stale`}</span>}{partial > 0 && <span className={s.warning}>{zh ? ` · ${partial} 项部分可用` : ` · ${partial} partial`}</span>}{unavailable > 0 && <span className={s.warning}>{zh ? ` · ${unavailable} 项无存储数据` : ` · ${unavailable} unavailable`}</span>}</strong>
-        <p>{zh ? `总计 ${symbols.length} · 已解析 ${resolved} · 未检查 ${unchecked} · 只读查询完成 ${queried}/${symbols.length}` : `Total ${symbols.length} · Resolved ${resolved} · Unchecked ${unchecked} · Read queries completed ${queried}/${symbols.length}`}{loading ? (zh ? " · 分批检查中" : " · Checking batches") : ""}{lastCheckedAt ? ` · ${zh ? "最近检查" : "Last checked"} ${new Date(lastCheckedAt).toLocaleTimeString(zh ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" })}` : ""}</p>
+      <div role="status" aria-live="polite" data-testid="research-coverage">
+        <strong>{zh ? `已读取 ${processed}/${symbols.length} · 完整 ${complete} · 部分 ${partial} · 暂无数据 ${unavailable}` : `Read ${processed}/${symbols.length} · Complete ${complete} · Partial ${partial} · Unavailable ${unavailable}`}</strong>
+        <p><span className={stale ? s.warning : undefined}>{zh ? `${stale} 只含超期缓存` : `${stale} with expired cache`}</span>{zh ? ` · 当前可比较 ${checked} 只` : ` · Currently comparable ${checked}`}</p>
+        {(failed > 0 || unchecked > 0) && <p className={s.warning}>{zh ? `${failed} 项获取失败 · ${unchecked} 项尚未读取` : `${failed} failed · ${unchecked} unchecked`}{loading ? (zh ? " · 分批读取中" : " · Reading batches") : ""}</p>}
+        <p>{zh ? `总计 ${symbols.length} · 已解析 ${resolved}` : `Total ${symbols.length} · Resolved ${resolved}`}{lastCheckedAt ? ` · ${zh ? "最近读取尝试" : "Last read attempt"} ${new Date(lastCheckedAt).toLocaleTimeString(zh ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" })}` : ""}</p>
       </div>
       <button type="button" onClick={refresh} disabled={loading || !symbols.length}><RefreshCw size={14} />{zh ? "刷新数据" : "Refresh data"}</button>
-      <details><summary>{zh ? "检查口径与比较基准" : "Coverage and comparison baseline"}</summary><p>{zh ? "只读查询完成包含部分可用和无数据；已检查仅包含缓存期限内、日期一致的完整行情与预测。刷新只重读已有存储，不生成预测或拉取新行情。缓存期限不保证上游最新：行情缓存最多30分钟、预测生成后最多30小时，数据日期另设4天上限（不是交易日历）。请查看各项数据日期。" : "Completed reads include partial and missing data. Checked requires complete, date-aligned data within cache limits. Refresh only reads stored data; it does not fetch market data or generate forecasts. Cache limits (30 minutes for market data, 30 hours for forecasts, plus a four-day observation age cap) do not guarantee upstream freshness or follow a trading calendar."}</p><p>{zh ? "比较基准固定在本机首次成功检查的数据；刷新、查看和标记提醒已读均不代表完成复核。本轮不提供完成归档或跨设备事件同步；变化恢复到基准时可能不再显示，不保留中间事件。" : "The baseline is pinned to this device’s first successful check. Refreshing, viewing and reading notifications do not complete a review. Completion archives and cross-device events are not available; changes that revert to baseline may disappear without intermediate history."}</p></details>
+      <details><summary>{zh ? "检查口径与比较基准" : "Coverage and comparison baseline"}</summary><p>{zh ? "已读取 = 完整 + 部分 + 暂无数据；已读取 + 获取失败 + 尚未读取 = 总计。超期缓存独立统计，包含部分数据及失败后保留的旧值，不参与上述求和。当前可比较沿用现有准入规则，不代表已经完成历史对照或复核。刷新只重读已有存储，不生成预测或拉取新行情。" : "Read = complete + partial + unavailable; read + failed + unchecked = total. Expired cache is independent and includes partial data and retained values after a failure. Comparable uses the existing eligibility rules; it does not mean a baseline comparison or review is complete. Refresh only reads stored data; it does not fetch market data or generate forecasts."}</p><p>{zh ? "市场时效待核验：本轮没有交易日历或收盘完整性确认。完整数据客户端复用最多15分钟；部分、无数据及失败仅短期复用30秒。行情服务端复用最多30分钟，预测复用最多30小时，另受数据日期上限等现有规则约束。缓存超期不等于行情落后；预测复用期限已过也不代表预测结论失效。缺失时间显示未提供，不作推断。" : "Market freshness is unverified: no trading calendar or completed-session verification is available. Complete client data is reused for up to 15 minutes; partial, missing and failed results only for 30 seconds. Server market-cache reuse up to 30 minutes and forecast reuse up to 30 hours, subject to existing date limits. Cache expiry does not establish market lag or invalidate a forecast conclusion. Missing times are not inferred."}</p><p>{zh ? "比较基准固定在本机首次成功检查的数据；刷新、查看和标记提醒已读均不代表完成复核。本轮不提供完成归档或跨设备事件同步；变化恢复到基准时可能不再显示，不保留中间事件。" : "The baseline is pinned to this device’s first successful check. Refreshing, viewing and reading notifications do not complete a review. Completion archives and cross-device events are not available; changes that revert to baseline may disappear without intermediate history."}</p></details>
     </div>
 
     {!baselineStored && <p className={s.warning} role="alert">{zh ? "比较基准未能保存到本机；本次仍可查看数据，下次访问可能需要重新建立基准。" : "The baseline could not be saved locally. Data remains usable, but the next visit may need a new baseline."}</p>}
@@ -88,15 +93,22 @@ export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: 
       {!symbols.length ? <div className={s.empty}><p>{zh ? "本机当前没有可显示的关注资产。可以从一次研究开始，不需要凑齐关注数量。" : "No followed assets are currently loaded on this device. Start with one research visit; there is no required watchlist size."}</p><Link href="/">{zh ? "查找资产" : "Find an asset"}<ArrowRight size={14} /></Link></div> : <div className={s.watchlist}>{symbols.map((symbol) => {
         const entry = entries[symbol];
         const asset = identity(symbol);
-        const status = entry?.status === "fresh" && !completeResearchEntry(entry) ? "failed" : entry?.status || "unchecked";
+        const semantics = researchSemantics(entry, displayNow);
+        const status = semantics.execution === "processed" ? semantics.completeness! : semantics.execution;
         const review = userState.research_reviews?.[symbol];
         return <article className={s.asset} key={symbol} data-testid="research-asset">
-          <header>{title(symbol)}<span className={`${s.status} ${["failed", "stale", "partial", "unavailable"].includes(status) ? s.warning : ""}`}>{stateLabel(status, zh)}{status === "partial" && entry?.source && [entry.source.history, entry.source.forecast].some((source) => source.status === "stale") ? (zh ? " · 含过期缓存" : " · Includes stale cache") : ""}</span></header>
-          {entry?.errors.length ? <p className={s.warning}>{[...new Set(entry.errors.map((error) => errorLabel(error.kind, zh)))].join(" · ")}{entry.history || entry.forecast ? (zh ? "；保留可用数据，不能确认全部变化。" : "; available data retained; changes are not fully confirmed.") : ""}</p> : null}
+          <header>{title(symbol)}<span className={`${s.status} ${status !== "complete" ? s.warning : ""}`}>{stateLabel(status, zh)}</span></header>
+          {semantics.execution === "failed" && <p className={s.warning}>{zh ? "本次获取失败" : "This read failed"}{semantics.retained ? (zh ? "；保留上次可用值，不计入本次已读取或完整数据。" : "; last available values retained, excluded from this read’s completeness counts.") : ""}</p>}
+          <p className={s.note}>{zh ? "市场时效待核验" : "Market freshness unverified"} · {semantics.freshness.checked ? (zh ? "满足现有比较条件" : "Meets existing comparison rules") : (zh ? "当前不可比较" : "Not currently comparable")}</p>
+          {(semantics.freshness.clientExpired || semantics.freshness.historyExpired || semantics.freshness.forecastExpired) && <p className={s.warning}>{[
+            semantics.freshness.clientExpired && (zh ? "客户端缓存超期" : "Client cache expired"),
+            semantics.freshness.historyExpired && (zh ? "行情缓存复用期限已过" : "Market cache reuse period elapsed"),
+            semantics.freshness.forecastExpired && (zh ? "预测复用期限已过" : "Forecast reuse period elapsed"),
+          ].filter(Boolean).join(" · ")}</p>}
           <dl className={s.metrics}><div><dt>{zh ? "现价" : "Price"}</dt><dd>{metric(entry?.history?.snapshot.latest_price, false)}</dd></div><div><dt>{zh ? "1D 涨跌" : "1D return"}</dt><dd>{metric(entry?.history?.snapshot.return_1d, true)}</dd></div><div><dt>{zh ? "1M 预测" : "1M forecast"}</dt><dd>{metric(entry?.forecast?.forecast_1m_return, true)}</dd></div><div><dt>{zh ? "20日年化波动率" : "20D annualized volatility"}</dt><dd>{metric(entry?.history?.snapshot.annualized_volatility_20d, true, false)}</dd></div></dl>
           <p className={s.note}>{zh ? "行情" : "Market"} {entry?.history?.data_as_of || "—"} · {zh ? "预测" : "Forecast"} {entry?.forecast?.data_as_of || "—"}</p>
-          {entry?.source && <details className={s.note}><summary>{zh ? "来源与缓存时间" : "Sources and cache times"}</summary><p>{zh ? "已有行情缓存" : "Stored market cache"} · {stateLabel(entry.source.history.status, zh)} · {entry.source.history.stored_at ? date(entry.source.history.stored_at, zh) : "—"}<br />{zh ? "已有冻结预测 · 生成于" : "Stored frozen forecast · Generated"} {entry.source.forecast.generated_at ? date(entry.source.forecast.generated_at, zh) : "—"} · {stateLabel(entry.source.forecast.status, zh)}<br />{zh ? "本机接收于" : "Received on this device"} {entry.checkedAt ? date(new Date(entry.checkedAt).toISOString(), zh) : "—"}</p></details>}
-          {status === "fresh" && <p className={s.note}>{taskSymbols.has(symbol) ? (zh ? "有待复核事项，见上方队列。" : "Review items are in the queue above.") : !baseline[symbol] || newBaselines.includes(symbol) ? (zh ? "无历史比较基准 · 本次建立本机基准" : "No prior baseline · Baseline established locally") : (zh ? "已检查 · 无实质方向变化" : "Checked · No material direction change")}</p>}
+          {entry && <SourceDetails entry={entry} now={displayNow} zh={zh} />}
+          {semantics.freshness.checked && <p className={s.note}>{taskSymbols.has(symbol) ? (zh ? "有待复核事项，见上方队列。" : "Review items are in the queue above.") : !baseline[symbol] || newBaselines.includes(symbol) ? (zh ? "无历史比较基准 · 本次建立本机基准" : "No prior baseline · Baseline established locally") : (zh ? "已对照基准 · 无实质方向变化" : "Compared with baseline · No material direction change")}</p>}
           {review && <ReviewContext review={review} zh={zh} />}
           <footer><Link className={s.primary} href={assetPath(symbol)}>{zh ? "查看研究" : "View research"}<ArrowRight size={14} /></Link><button type="button" onClick={() => removeFavorite(symbol)} aria-label={`${zh ? "取消关注" : "Unfollow"} ${symbol}`}><BookmarkX size={14} /></button>{asset && <button type="button" onClick={() => onPresetAlert(asset, "signal", "any")}><Bell size={14} />{zh ? "方向提醒" : "Signal alert"}</button>}</footer>
         </article>;
@@ -122,5 +134,31 @@ function signal(value: string, zh: boolean) { return zh ? ({ Up: "偏多", Down:
 function date(value: string, zh: boolean) { const parsed = new Date(value); return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString(zh ? "zh-CN" : "en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
 function metric(value: unknown, percent: boolean, signed = true) { return typeof value === "number" && Number.isFinite(value) ? percent ? formatPercent(value, signed) : formatNumber(value) : "—"; }
 function typeLabel(asset: Asset, zh: boolean) { return zh ? ({ stock: "股票", etf: "ETF", fund: "基金", index: "指数", currency: "外汇", market: "市场" })[asset.asset_type] : asset.asset_type.toUpperCase(); }
-function stateLabel(status: string, zh: boolean) { return ({ available: zh ? "缓存期限内" : "Within cache lifetime", partial: zh ? "部分可用" : "Partially available", unavailable: zh ? "无存储数据" : "No stored data", loading: zh ? "检查中" : "Checking", fresh: zh ? "数据已检查" : "Data checked", stale: zh ? "缓存待更新" : "Stale cache", failed: zh ? "获取失败" : "Failed", unchecked: zh ? "尚未检查" : "Unchecked" })[status] || status; }
-function errorLabel(kind: string, zh: boolean) { return ({ history: zh ? "行情缺失" : "Market data unavailable", forecast: zh ? "预测缺失" : "Forecast unavailable", asset: zh ? "资产解析失败" : "Identity unavailable", network: zh ? "网络更新失败" : "Network refresh failed" })[kind] || (zh ? "数据获取失败" : "Data unavailable"); }
+function stateLabel(status: string, zh: boolean) { return ({ complete: zh ? "完整" : "Complete", partial: zh ? "部分可用" : "Partial", unavailable: zh ? "暂无数据" : "Unavailable", failed: zh ? "获取失败" : "Failed", unchecked: zh ? "尚未读取" : "Unchecked" })[status] || status; }
+
+function SourceDetails({ entry, now, zh }: { entry: ResearchDataEntry; now: number; zh: boolean }) {
+  const { freshness } = researchSemantics(entry, now);
+  const history = entry.source?.history, forecast = entry.source?.forecast;
+  const missing = zh ? "未提供" : "Not provided";
+  const time = (value: string | number | null | undefined) => value !== null && value !== undefined && Number.isFinite(new Date(value).getTime()) ? date(new Date(value).toISOString(), zh) : missing;
+  const age = (ms: number | null) => ms === null ? (zh ? "年龄未知" : "Age unknown") : ms < 60_000 ? (zh ? "不足1分钟" : "Under 1 minute") : ms < 3600_000 ? (zh ? `${Math.floor(ms / 60_000)}分钟` : `${Math.floor(ms / 60_000)} min`) : (zh ? `${Math.floor(ms / 3600_000)}小时` : `${Math.floor(ms / 3600_000)} hr`);
+  const sourceState = (source: typeof history, expired: boolean) => {
+    if (!source) return missing;
+    if (source.status === "failed") return zh ? "本次读取失败" : "Read failed";
+    if (source.status === "unavailable") return zh ? "暂无数据" : "Unavailable";
+    if (expired) return zh ? "复用期限已过" : "Reuse period elapsed";
+    if (source.reason === "market_date_mismatch") return zh ? "行情与预测日期不一致" : "Market and forecast dates differ";
+    if (source.status === "stale" || !source.expires_at) return zh ? "复用资格待确认" : "Reuse eligibility unconfirmed";
+    return zh ? "复用期限内（不保证市场时效）" : "Within reuse period (market freshness unverified)";
+  };
+  return <details className={s.sources}><summary>{zh ? "来源与缓存时间" : "Sources and cache times"}</summary><dl>
+    <div><dt>{zh ? "行情 data_as_of" : "Market data_as_of"}</dt><dd>{entry.history?.data_as_of || missing}</dd></div>
+    <div><dt>{zh ? "行情 KV 存储时间" : "Market KV stored at"}</dt><dd>{time(history?.stored_at)} · {age(freshness.historyAgeMs)}</dd></div>
+    <div><dt>{zh ? "行情服务端复用截止" : "Market server reuse until"}</dt><dd>{time(history?.expires_at)} · {sourceState(history, freshness.historyExpired)}</dd></div>
+    <div><dt>{zh ? "预测 data_as_of" : "Forecast data_as_of"}</dt><dd>{entry.forecast?.data_as_of || missing}</dd></div>
+    <div><dt>{zh ? "预测生成时间" : "Forecast generated at"}</dt><dd>{time(forecast?.generated_at)} · {age(freshness.forecastAgeMs)}</dd></div>
+    <div><dt>{zh ? "预测复用截止" : "Forecast reuse until"}</dt><dd>{time(forecast?.expires_at)} · {sourceState(forecast, freshness.forecastExpired)}</dd></div>
+    <div><dt>{zh ? "客户端接收时间" : "Client received at"}</dt><dd>{time(entry.checkedAt)} · {age(freshness.clientAgeMs)}</dd></div>
+    <div><dt>{zh ? "客户端缓存" : "Client cache"}</dt><dd>{freshness.clientAgeMs === null ? (zh ? "复用年龄未知" : "Reuse age unknown") : freshness.clientExpired ? (zh ? "已超过15分钟复用期限" : "Beyond the 15-minute reuse period") : (zh ? "接收未满15分钟；不代表源数据仍有效" : "Received within 15 minutes; source eligibility is separate")}</dd></div>
+  </dl></details>;
+}

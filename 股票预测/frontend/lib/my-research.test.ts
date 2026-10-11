@@ -22,7 +22,7 @@ function entry(symbol = "NVDA", signal: Forecast["signal"] = "Down"): ResearchDa
     asset: { symbol, name: symbol, asset_type: "stock", data_source: "yahoo" },
     history: { symbol, data_source: "yahoo", data_as_of: "2026-10-03", snapshot: { latest_price: 89 }, records: [] },
     forecast: { symbol, signal, data_as_of: "2026-10-03", confidence_score: 70, key_levels: { invalidation: 95 }, base_price: 89 } as Forecast,
-    errors: [], status: "fresh", checkedAt: now.getTime(),
+    errors: [], status: "fresh", checkedAt: Date.now(), queryCompleted: true,
   };
 }
 const queue = (overrides: Partial<Parameters<typeof buildResearchQueue>[0]> = {}) => buildResearchQueue({ symbols: ["NVDA"], baseline: { NVDA: initial }, entries: { NVDA: entry() }, now, ...overrides });
@@ -113,7 +113,7 @@ describe("My Research action queue", () => {
 
   it("returns a true empty state for a new user", () => {
     expect(queue({ symbols: [], entries: {}, baseline: {}, reviews: {}, alerts: [], alertHistory: [] })).toEqual([]);
-    expect(deriveResearchCoverage([], {}, {})).toEqual({ total: 0, resolved: 0, checked: 0, failed: 0, queried: 0, partial: 0, unavailable: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 });
+    expect(deriveResearchCoverage([], {}, {})).toEqual({ total: 0, resolved: 0, checked: 0, failed: 0, processed: 0, complete: 0, queried: 0, partial: 0, unavailable: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 });
   });
 });
 
@@ -122,7 +122,7 @@ describe("My Research coverage", () => {
     const symbols = Array.from({ length: count }, (_, index) => `ASSET${index}`);
     const entries = Object.fromEntries(symbols.map((symbol) => [symbol, entry(symbol, "Up")]));
     const baseline = Object.fromEntries(symbols.map((symbol) => [symbol, initial]));
-    expect(deriveResearchCoverage(symbols, entries, baseline)).toEqual({ total: count, resolved: count, checked: count, failed: 0, queried: 0, partial: 0, unavailable: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: count });
+    expect(deriveResearchCoverage(symbols, entries, baseline)).toEqual({ total: count, resolved: count, checked: count, failed: 0, processed: count, complete: count, queried: count, partial: 0, unavailable: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: count });
   });
 
   it("never reports failures as checked/no change", () => {
@@ -139,8 +139,8 @@ describe("My Research coverage", () => {
       NFLX: entry("NFLX", "Up"),
     };
     const coverage = deriveResearchCoverage(["NVDA", "AAPL", "MSFT", "META", "NFLX", "UNRESOLVED", "nvda"], entries, { NVDA: initial });
-    expect(coverage).toEqual({ total: 6, resolved: 5, checked: 2, failed: 1, queried: 0, partial: 0, unavailable: 0, unchecked: 2, loading: 1, stale: 1, noBaseline: 1, unchanged: 1 });
-    expect(coverage.checked + coverage.failed + coverage.stale + coverage.unchecked).toBe(coverage.total);
+    expect(coverage).toEqual({ total: 6, resolved: 5, checked: 2, failed: 1, processed: 3, complete: 3, queried: 3, partial: 0, unavailable: 0, unchecked: 2, loading: 1, stale: 0, noBaseline: 1, unchanged: 1 });
+    expect(coverage.processed + coverage.failed + coverage.unchecked).toBe(coverage.total);
   });
 });
 

@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Asset, Forecast, UserState } from "@/lib/types";
 import type { ResearchDataEntry } from "@/lib/my-research-data";
 import { normalizeUserState } from "@/lib/user-state";
+import { createResearchDataLoader } from "@/lib/my-research-data";
+import recorded from "../tests/fixtures/research-read-only-50.json";
+import type { MarketSnapshot } from "@/lib/types";
 import { RESEARCH_BASELINE_KEY } from "@/lib/my-research";
 import { MyResearchWorkspace } from "./my-research-workspace";
 
@@ -13,7 +16,7 @@ vi.mock("./asset-logo", () => ({ AssetLogo: () => null }));
 vi.mock("./app-link", () => ({ AppLink: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 const initial = { signal: "Up", confidence: 70, invalidation: 90, price: 100, data_as_of: "2026-10-01" };
 function entry(symbol: string, signal = "Up"): ResearchDataEntry {
-  return { asset: { symbol, name: `Asset ${symbol}`, asset_type: "stock", data_source: "yahoo" }, history: { symbol, data_source: "yahoo", data_as_of: "2026-10-04", snapshot: { latest_price: 95, return_1d: .01 }, records: [] }, forecast: { symbol, signal, data_as_of: "2026-10-04" } as Forecast, status: "fresh", errors: [] };
+  return { asset: { symbol, name: `Asset ${symbol}`, asset_type: "stock", data_source: "yahoo" }, history: { symbol, data_source: "yahoo", data_as_of: "2026-10-04", snapshot: { latest_price: 95, return_1d: .01 }, records: [] }, forecast: { symbol, signal, data_as_of: "2026-10-04" } as Forecast, status: "fresh", queryCompleted: true, checkedAt: Date.now(), errors: [] };
 }
 function watchlist(count: number) {
   const symbols = Array.from({ length: count }, (_, index) => `ASSET${index}`);
@@ -23,14 +26,15 @@ function watchlist(count: number) {
   return symbols;
 }
 function renderWorkspace() { return render(<MyResearchWorkspace onPresetAlert={vi.fn()} />); }
+afterEach(() => { vi.restoreAllMocks(); });
 beforeEach(() => { state.entries = {}; state.user = normalizeUserState(); state.favorites = []; state.loading = false; state.refresh.mockReset(); });
 
 describe("My Research visible reliability and action queue", () => {
   it.each([5, 20, 50])("shows all %i saved members even when identity restoration contains only five", (count) => {
     watchlist(count); renderWorkspace();
     expect(screen.getAllByTestId("research-asset")).toHaveLength(count);
-    expect(screen.getByText(`已检查 ${count}/${count}`)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(`总计 ${count} · 已解析 ${count} · 未检查 0`))).toBeInTheDocument();
+    expect(screen.getByText(`已读取 ${count}/${count} · 完整 ${count} · 部分 0 · 暂无数据 0`)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`总计 ${count} · 已解析 ${count}`))).toBeInTheDocument();
     expect(screen.getByText(/尚无历史比较基准；首次成功数据/)).toBeInTheDocument();
     expect(screen.queryByText(/暂无需要处理的重要变化/)).not.toBeInTheDocument();
   });
@@ -48,9 +52,9 @@ describe("My Research visible reliability and action queue", () => {
     const symbols = watchlist(20);
     for (const symbol of symbols.slice(-2)) state.entries[symbol] = { ...entry(symbol), status: "failed", forecast: undefined, errors: [{ kind: "forecast", message: "Unavailable" }] };
     renderWorkspace();
-    expect(screen.getByText("已检查 18/20")).toBeInTheDocument();
+    expect(screen.getByText("已读取 18/20 · 完整 18 · 部分 0 · 暂无数据 0")).toBeInTheDocument();
     expect(screen.getByText(/2 项获取失败/)).toBeInTheDocument();
-    expect(screen.getAllByText(/预测缺失；保留可用数据/)).toHaveLength(2);
+    expect(screen.getAllByText(/本次获取失败；保留上次可用值/)).toHaveLength(2);
   });
   it("merges due/reversal/read alert, exposes plan fields, and keeps the item after refresh/remount", () => {
     state.user = normalizeUserState({ watchlists: [{ id: "default", name: "Default", symbols: ["NVDA"] }], research_reviews: { NVDA: { symbol: "NVDA", reason: "invalidation", due_at: "2020-01-02T09:00:00Z", created_at: "2020-01-01", reference_price: 100, trigger_price: 90 } }, alerts: [{ id: "threshold", symbol: "NVDA", type: "below", value: 90, enabled: true }], alert_history: [{ id: "threshold", symbol: "NVDA", type: "below", value: 90, price: 89, change: -.04, triggered_at: "2020-01-03T09:00:00Z", read_at: "2020-01-04" }] });
@@ -81,9 +85,9 @@ describe("My Research visible reliability and action queue", () => {
     expect(screen.queryByText("本周研究进度")).not.toBeInTheDocument();
   });
   it("keeps stale data visibly stale instead of claiming it checked", () => {
-    watchlist(5); state.entries.ASSET0.status = "stale"; renderWorkspace();
-    expect(screen.getByText("已检查 4/5")).toBeInTheDocument();
-    expect(screen.getByText(/1 项缓存待更新/)).toBeInTheDocument();
+    watchlist(5); state.entries.ASSET0.status = "stale"; state.entries.ASSET0.checkedAt = Date.now() - 3600_000; renderWorkspace();
+    expect(screen.getByTestId("research-coverage")).toHaveTextContent("当前可比较 4 只");
+    expect(screen.getByText("1 只含超期缓存")).toBeInTheDocument();
     expect(screen.getByText(/尚不能确认全部关注资产的变化/)).toBeInTheDocument();
   });
   it("separates completed read queries from complete comparisons and missing data", () => {
@@ -92,10 +96,10 @@ describe("My Research visible reliability and action queue", () => {
     state.entries.ASSET1 = { ...entry("ASSET1"), status: "unavailable", history: undefined, forecast: undefined, queryCompleted: true };
     for (const symbol of ["ASSET2", "ASSET3", "ASSET4"]) state.entries[symbol].queryCompleted = true;
     renderWorkspace();
-    expect(screen.getByText("已检查 3/5")).toBeInTheDocument();
-    expect(screen.getByText(/只读查询完成 5\/5/)).toBeInTheDocument();
-    expect(screen.getByText(/1 项部分可用/)).toBeInTheDocument();
-    expect(screen.getByText(/1 项无存储数据/)).toBeInTheDocument();
+    expect(screen.getByTestId("research-coverage")).toHaveTextContent("当前可比较 3 只");
+    expect(screen.getByText("已读取 5/5 · 完整 3 · 部分 1 · 暂无数据 1")).toBeInTheDocument();
+    expect(screen.getByText("部分可用")).toBeInTheDocument();
+    expect(screen.getByText("暂无数据")).toBeInTheDocument();
     expect(screen.queryByText(/暂无需要处理的重要变化/)).not.toBeInTheDocument();
     expect(screen.getByText(/刷新只重读已有存储/)).toBeInTheDocument();
   });
@@ -105,4 +109,52 @@ describe("My Research visible reliability and action queue", () => {
     expect(screen.getByText(/不需要凑齐关注数量/)).toBeInTheDocument();
     expect(screen.queryByTestId("research-task")).not.toBeInTheDocument();
   });
+});
+
+
+describe("freshness semantics in the workspace", () => {
+  it("renders the real 50-asset split with independent expiry and no baseline writes", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-10T19:41:43.355Z"));
+    const items = recorded as unknown as MarketSnapshot[];
+    const symbols = items.map(item => item.asset.symbol);
+    state.user = normalizeUserState({ watchlists: [{ id: "default", name: "Sample", symbols }] });
+    const loader = createResearchDataLoader({ now: () => Date.now(), readCache: async () => null, writeCache: async () => {}, fetchBatch: async batch => structuredClone(items.filter(item => batch.includes(item.asset.symbol))) });
+    await loader.load(symbols, update => Object.assign(state.entries, update.entries));
+    renderWorkspace();
+    const coverage = screen.getByTestId("research-coverage");
+    expect(coverage).toHaveTextContent("已读取 50/50 · 完整 15 · 部分 10 · 暂无数据 25");
+    expect(coverage).toHaveTextContent("25 只含超期缓存 · 当前可比较 0 只");
+    const partial = screen.getAllByTestId("research-asset").find(row => row.textContent?.includes("NFLX"))!;
+    expect(partial).toHaveTextContent("部分可用");
+    expect(partial).toHaveTextContent("行情缓存复用期限已过");
+    expect(partial).toHaveTextContent("市场时效待核验");
+    expect(screen.queryByTestId("research-task")).not.toBeInTheDocument();
+    expect(localStorage.getItem(RESEARCH_BASELINE_KEY)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
+    expect(localStorage.getItem(RESEARCH_BASELINE_KEY)).toBeNull();
+  });
+
+  it("does not substitute the client receipt time for missing server timestamps", () => {
+    watchlist(1);
+    state.entries.ASSET0 = { ...state.entries.ASSET0, status: "stale", checkedAt: Date.parse("2026-10-11T04:00:00Z") };
+    renderWorkspace();
+    const details = screen.getByTestId("research-asset").querySelector("details")!;
+    expect(within(details).getByText("行情 KV 存储时间").nextElementSibling).toHaveTextContent("未提供 · 年龄未知");
+    expect(within(details).getByText("预测生成时间").nextElementSibling).toHaveTextContent("未提供 · 年龄未知");
+    expect(within(details).getByText("客户端接收时间").nextElementSibling).not.toHaveTextContent("未提供");
+    expect(screen.getByTestId("research-coverage")).toHaveTextContent("当前可比较 0 只");
+  });
+  it("shows a newly received client response age before the next minute tick", () => {
+    const start = Date.parse("2026-10-11T04:00:00Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    watchlist(1); state.entries.ASSET0 = { status: "loading", errors: [] };
+    const view = renderWorkspace();
+    clock.mockReturnValue(start + 500);
+    state.entries.ASSET0 = entry("ASSET0");
+    view.rerender(<MyResearchWorkspace onPresetAlert={vi.fn()} />);
+    const details = screen.getByTestId("research-asset").querySelector("details")!;
+    expect(within(details).getByText("客户端接收时间").nextElementSibling).toHaveTextContent("不足1分钟");
+    expect(within(details).getByText("客户端缓存").nextElementSibling).not.toHaveTextContent("未知");
+  });
+
 });

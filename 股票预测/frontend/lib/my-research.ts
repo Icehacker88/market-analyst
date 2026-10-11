@@ -3,7 +3,7 @@ import type { AlertHistory, Asset, Forecast, History, PriceAlert, ResearchReview
 export type ResearchBaseline = NonNullable<UserState["forecast_snapshots"]>;
 export type ResearchSnapshot = ResearchBaseline[string];
 export type { ResearchDataEntry } from "./my-research-data";
-import type { ResearchDataEntry } from "./my-research-data";
+import { RESEARCH_FRESH_MS, type ResearchDataEntry } from "./my-research-data";
 export type ResearchEntries = Record<string, ResearchDataEntry>;
 export type ResearchReason =
   | { id: string; kind: "review_due"; review: ResearchReview }
@@ -23,10 +23,14 @@ export type ResearchCoverage = {
   failed: number;
   partial: number;
   unavailable: number;
+  processed: number;
+  complete: number;
+  /** Compatibility alias for processed, not an independent count. */
   queried: number;
-  /** Loading is a subset of unchecked. Checked, failed, partial, unavailable, stale and unchecked partition total. */
+  /** processed + failed + unchecked = total. Loading is a subset of unchecked. */
   unchecked: number;
   loading: number;
+  /** Independent age dimension; includes partial and retained failed data. */
   stale: number;
   noBaseline: number;
   /** Fresh complete forecast comparisons without a meaningful change, not completed reviews. */
@@ -61,6 +65,54 @@ export function completeResearchEntry(entry?: ResearchDataEntry): entry is Resea
     && finite(entry.history.snapshot?.latest_price) && entry.history.snapshot.latest_price > 0
     && entry.history.data_as_of && entry.forecast.data_as_of
     && ["Up", "Down", "Observe"].includes(entry.forecast.signal));
+}
+
+export type ResearchSemantics = {
+  execution: "processed" | "failed" | "unchecked";
+  completeness: "complete" | "partial" | "unavailable" | null;
+  retained: boolean;
+  freshness: {
+    clientAgeMs: number | null;
+    clientExpired: boolean;
+    historyAgeMs: number | null;
+    historyExpired: boolean;
+    forecastAgeMs: number | null;
+    forecastExpired: boolean;
+    stale: boolean;
+    market: "unverified";
+    checked: boolean;
+  };
+};
+
+/** Presentation only. Transport/cache states and the existing comparison gate stay unchanged. */
+export function researchSemantics(entry?: ResearchDataEntry, now = Date.now()): ResearchSemantics {
+  const hasData = Boolean(entry?.history || entry?.forecast);
+  const execution = !entry || ["loading", "unchecked"].includes(entry.status) ? "unchecked"
+    : entry.status === "failed" || (entry.status === "fresh" && !completeResearchEntry(entry)) ? "failed"
+      : entry.queryCompleted ? "processed" : "unchecked";
+  const completeness = execution !== "processed" ? null
+    : entry?.history && entry.forecast ? "complete" : hasData ? "partial" : "unavailable";
+  const age = (value: string | number | null | undefined) => {
+    const stamp = typeof value === "string" ? Date.parse(value) : value;
+    return typeof stamp === "number" && Number.isFinite(stamp) && stamp > 0 && stamp <= now ? now - stamp : null;
+  };
+  const history = entry?.source?.history;
+  const forecast = entry?.source?.forecast;
+  const expired = (source: typeof history) => Boolean(source && (
+    (typeof source.expires_at === "number" && Number.isFinite(source.expires_at) && source.expires_at > 0 && source.expires_at <= now)
+    || source.reason === "cache_expired" || source.reason === "forecast_expired"
+  ));
+  const clientAgeMs = age(entry?.checkedAt);
+  const clientExpired = hasData && clientAgeMs !== null && clientAgeMs >= RESEARCH_FRESH_MS;
+  const historyExpired = Boolean(entry?.history) && expired(history);
+  const forecastExpired = Boolean(entry?.forecast) && expired(forecast);
+  return { execution, completeness, retained: execution === "failed" && hasData,
+    freshness: { clientAgeMs, clientExpired, historyAgeMs: age(history?.stored_at), historyExpired,
+      forecastAgeMs: age(forecast?.generated_at), forecastExpired,
+      stale: clientExpired || historyExpired || forecastExpired,
+      // No market calendar/finality evidence is supplied by this contract.
+      market: "unverified", checked: completeResearchEntry(entry) },
+  };
 }
 
 export function researchSnapshot(entry: ResearchDataEntry): ResearchSnapshot | null {
@@ -104,28 +156,26 @@ function directionReversed(previous: ResearchSnapshot, current: ResearchSnapshot
   return (previous.signal === "Up" && current.signal === "Down") || (previous.signal === "Down" && current.signal === "Up");
 }
 
-export function deriveResearchCoverage(symbols: readonly string[], entries: ResearchEntries, baseline: ResearchBaseline = {}): ResearchCoverage {
-  const coverage: ResearchCoverage = { total: 0, resolved: 0, checked: 0, failed: 0, partial: 0, unavailable: 0, queried: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 };
+export function deriveResearchCoverage(symbols: readonly string[], entries: ResearchEntries, baseline: ResearchBaseline = {}, now = Date.now()): ResearchCoverage {
+  const coverage: ResearchCoverage = { total: 0, resolved: 0, checked: 0, failed: 0, complete: 0, partial: 0, unavailable: 0, processed: 0, queried: 0, unchecked: 0, loading: 0, stale: 0, noBaseline: 0, unchanged: 0 };
   for (const symbol of researchSymbols(symbols)) {
     coverage.total += 1;
     const entry = entries[symbol];
+    const state = researchSemantics(entry, now);
     if (entry?.asset) coverage.resolved += 1;
-    if (entry?.queryCompleted) coverage.queried += 1;
+    coverage[state.execution] += 1;
+    if (state.completeness) coverage[state.completeness] += 1;
+    if (entry?.status === "loading") coverage.loading += 1;
+    if (state.freshness.stale) coverage.stale += 1;
     const current = entry && researchSnapshot(entry);
     if (current) {
       coverage.checked += 1;
       const previous = baseline[symbol];
       if (!validSnapshot(previous)) coverage.noBaseline += 1;
       else if (!directionReversed(previous, current)) coverage.unchanged += 1;
-    } else if (entry?.status === "failed" || entry?.status === "fresh") coverage.failed += 1;
-    else if (entry?.status === "partial") coverage.partial += 1;
-    else if (entry?.status === "unavailable") coverage.unavailable += 1;
-    else if (entry?.status === "stale") coverage.stale += 1;
-    else {
-      coverage.unchecked += 1;
-      if (entry?.status === "loading") coverage.loading += 1;
     }
   }
+  coverage.queried = coverage.processed;
   return coverage;
 }
 

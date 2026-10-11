@@ -47,3 +47,12 @@
 .scheduled article { margin: 10px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
 
 @media (max-width: 520px) { .page :global(.page-title) { flex-direction: column; align-items: flex-start; gap: 10px; } }
+
+.coverage > [role="status"] { min-width: 0; flex: 1 1 320px; }
+.coverage strong { line-height: 1.7; overflow-wrap: anywhere; }
+.sources { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.sources summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.sources dl { display: grid; gap: 8px; margin: 6px 0; }
+.sources dl > div { display: grid; gap: 3px; min-width: 0; }
+.sources dt { font-weight: 600; }
+.sources dd { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
