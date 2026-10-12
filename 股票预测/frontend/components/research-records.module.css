@@ -31,3 +31,13 @@
 @media(max-width:767px) { .list, .optional { grid-template-columns: 1fr; } .dialog { padding: 18px; } .entry { align-items: flex-start; } }
 
 .section > header > span { white-space: nowrap; }
+.reviewAction { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.reviewAction button { min-height: 44px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--border); border-radius: 7px; color: var(--accent); background: var(--surface); }
+.reviewContext { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.reviewDialog { width: min(740px, calc(100vw - 24px)); }
+.reviewDialog dl { display: grid; gap: 10px; font-size: 13px; }
+.reviewDialog dt { color: var(--muted); }
+.reviewDialog dd { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.reviewDialog summary { min-height: 44px; padding: 10px 0; cursor: pointer; }
+.reviewContext h3, .reviewHistory h4 { margin: 0 0 8px; font-size: 14px; }
+.reviewHistory section { border-top: 1px solid var(--border); padding: 14px 0; }

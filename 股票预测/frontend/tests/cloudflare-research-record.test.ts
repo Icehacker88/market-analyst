@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
 import { onRequest } from "../functions/api/[[path]]";
+import { makeReviewEvent } from "../lib/research-record-review";
+import { normalizeUserState } from "../lib/user-state";
 import { makeResearchRecord } from "../lib/research-record";
 
 it("round-trips a new record through the unchanged generated Worker user-state API without losing legacy reviews", async () => {
@@ -26,4 +28,10 @@ it("round-trips a new record through the unchanged generated Worker user-state A
   const result = await (await request("GET")).json() as { data: Record<string, unknown> };
   expect(result.data.research_records).toEqual({ [record.id]: record });
   expect(result.data.research_reviews).toEqual(reviews);
+  const event = makeReviewEvent(record, normalizeUserState({ research_records: { [record.id]: record } }), { outcome: "archive", direction: "bullish", reason: "Manual close", risk_changes: "No change", next_review_date: null });
+  expect((await request("PATCH", { patch: { research_review_events: { [event.id]: event } } })).status).toBe(200);
+  const restored = await (await request("GET")).json() as { data: Record<string, unknown> };
+  expect(restored.data.research_review_events).toEqual({ [event.id]: event });
+  expect(restored.data.research_records).toEqual(result.data.research_records);
+  expect(restored.data.research_reviews).toEqual(reviews);
 });

@@ -1,3 +1,5 @@
+import { makeResearchRecord } from "@/lib/research-record";
+import { appendReviewEvent, makeReviewEvent } from "@/lib/research-record-review";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Asset, Forecast, UserState } from "@/lib/types";
@@ -157,4 +159,13 @@ describe("freshness semantics in the workspace", () => {
     expect(within(details).getByText("客户端缓存").nextElementSibling).not.toHaveTextContent("未知");
   });
 
+});
+
+it("shows separate due record actions without a watchlist and removes only the reviewed task", () => {
+ const asset: Asset = { symbol: "NVDA", name: "Nvidia", asset_type: "stock", data_source: "yahoo" };
+ const draft = { direction: "bullish" as const, reason: "Judgment", risks: "Risk", invalidation: null, review_date: "2020-01-01" };
+ const a=makeResearchRecord(asset,draft),b=makeResearchRecord(asset,draft);state.user=normalizeUserState({research_records:{[a.id]:a,[b.id]:b}});
+ const view=renderWorkspace();expect(screen.getAllByTestId("research-task")).toHaveLength(1);expect(screen.getAllByRole("button",{name:/^执行复核/})).toHaveLength(2);
+ state.user=appendReviewEvent(state.user,makeReviewEvent(a,state.user,{outcome:"maintain",direction:"bullish",reason:"Review",risk_changes:"Unchanged",next_review_date:null}));
+ view.rerender(<MyResearchWorkspace onPresetAlert={vi.fn()} />);expect(screen.getAllByRole("button",{name:/^执行复核/})).toHaveLength(1);expect(screen.getByRole("button",{name:new RegExp(b.id)})).toBeInTheDocument();
 });

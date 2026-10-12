@@ -8,8 +8,9 @@ import { observeWebVitals, trackEvent } from "@/lib/analytics";
 import { listQueuedStatePatches, queueStatePatch, removeQueuedStatePatch } from "@/lib/offline-store";
 import { DEFAULT_USER_STATE, applyUserStatePatch, hasStatePatch, normalizeUserState, statePatch } from "@/lib/user-state";
 import { createPrivateStorage, privateScope, type PrivateStorage } from "@/lib/private-storage";
+import { appendReviewEvent } from "@/lib/research-record-review";
 import { upsertResearchRecord } from "@/lib/research-record";
-import type { Asset, ResearchRecord, UserState } from "@/lib/types";
+import type { Asset, ResearchRecord, ResearchReviewEvent, UserState } from "@/lib/types";
 import { AuthProvider, useAuth } from "./auth-provider";
 import { PwaRuntime } from "./pwa-runtime";
 
@@ -25,6 +26,7 @@ type AppContextValue = {
   userState: UserState;
   updateUserState: (update: (current: UserState) => UserState) => void;
   saveResearchRecord: (record: ResearchRecord) => Promise<"saved" | "failed">;
+  saveResearchReview: (event: ResearchReviewEvent) => Promise<"saved" | "failed">;
   cloudSyncing: boolean;
   privateStorage: PrivateStorage;
 };
@@ -104,7 +106,10 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
         if (!active()) return;
         for (const item of queued) {
           if (!active()) return;
-          const queuedPatch = item.patch.research_records ? { ...item.patch, research_records: { ...syncedState.current.research_records, ...item.patch.research_records } } : item.patch;
+          const queuedPatch = { ...item.patch,
+            ...(item.patch.research_records ? { research_records: { ...syncedState.current.research_records, ...item.patch.research_records } } : {}),
+            ...(item.patch.research_review_events ? { research_review_events: { ...item.patch.research_review_events, ...syncedState.current.research_review_events } } : {}),
+          };
           const saved = await saveUserStatePatch(queuedPatch, options);
           if (!active()) return;
           syncedState.current = normalizeUserState(saved);
@@ -246,6 +251,27 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
     } catch { return "failed"; }
   }, [pending, persistState, privateStorage, userId]);
 
+  const reviewSaving = useRef(false);
+  const saveResearchReview = useCallback(async (event: ResearchReviewEvent): Promise<"saved" | "failed"> => {
+    if (!lifecycle.current.active || pending || reviewSaving.current) return "failed";
+    reviewSaving.current = true;
+    try {
+      const next = normalizeUserState(appendReviewEvent(latestState.current, event));
+      const serialized = JSON.stringify(next);
+      privateStorage.setItem("orivane-user-state", serialized);
+      if (privateStorage.getItem("orivane-user-state") !== serialized) return "failed";
+      if (userId) {
+        const item = await queueStatePatch(userId, { research_review_events: next.research_review_events });
+        const queued = await listQueuedStatePatches(userId);
+        if (!lifecycle.current.active || !queued.some(entry => entry.id === item.id)) return "failed";
+      }
+      if (!lifecycle.current.active) return "failed";
+      persistState(appendReviewEvent(latestState.current, event));
+      return "saved";
+    } catch { return "failed"; }
+    finally { reviewSaving.current = false; }
+  }, [pending, persistState, privateStorage, userId]);
+
   const toggleFavorite = useCallback((asset: Asset) => {
     if (!lifecycle.current.active || pending) return;
     const exists = favorites.some((item) => item.symbol === asset.symbol);
@@ -280,8 +306,9 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
     updateUserState,
     cloudSyncing,
     saveResearchRecord,
+    saveResearchReview,
     privateStorage,
-  }), [cloudSyncing, favorites, language, privateStorage, saveResearchRecord, theme, toggleFavorite, updateUserState, userState]);
+  }), [cloudSyncing, favorites, language, privateStorage, saveResearchRecord, saveResearchReview, theme, toggleFavorite, updateUserState, userState]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

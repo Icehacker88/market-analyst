@@ -19,6 +19,7 @@ export const DEFAULT_USER_STATE: UserState = {
   savedScreeners: [],
   research_reviews: {},
   research_records: {},
+  research_review_events: {},
   updated_at: null,
   state_revision: 0,
   daily_summary_enabled: true,
@@ -39,6 +40,7 @@ export function normalizeUserState(value?: Partial<UserState> | null): UserState
     savedScreeners: value?.savedScreeners || [],
     research_reviews: value?.research_reviews || {},
     research_records: value?.research_records || {},
+    research_review_events: value?.research_review_events || {},
     notification_preferences: { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(value?.notification_preferences || {}) },
     ai_chats: value?.ai_chats || {},
   };
@@ -59,6 +61,8 @@ export function applyUserStatePatch(current: UserState, patch: Partial<UserState
   return normalizeUserState({ ...current, ...patch,
     // Research records have stable IDs and no deletion operation in Round 1.
     research_records: { ...current.research_records, ...patch.research_records },
+    // Immutable events: retries merge IDs, never overwrite an existing event.
+    research_review_events: { ...patch.research_review_events, ...current.research_review_events },
   });
 }
 

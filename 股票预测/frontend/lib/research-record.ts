@@ -21,7 +21,7 @@ export function captureResearchSnapshot(symbol: string, history?: History, forec
 }
 export function makeResearchRecord(asset: Asset, draft: ResearchDraft, history?: History, forecast?: Forecast): ResearchRecord {
   const now = new Date().toISOString();
-  return { ...draft, version: 1, id: crypto.randomUUID(), symbol: asset.symbol, asset_name: asset.name_zh || asset.name,
+  return { ...draft, initial_judgment: { ...draft }, version: 1, id: crypto.randomUUID(), symbol: asset.symbol, asset_name: asset.name_zh || asset.name,
     currency: asset.currency || null, created_at: now, updated_at: now, snapshot: captureResearchSnapshot(asset.symbol, history, forecast) };
 }
 export function validResearchDraft(draft: ResearchDraft): boolean {
@@ -35,11 +35,12 @@ export function validResearchDraft(draft: ResearchDraft): boolean {
 export function upsertResearchRecord(state: UserState, record: ResearchRecord): UserState {
   if (!validResearchDraft(record)) throw new Error("Invalid research record");
   const previous = state.research_records?.[record.id];
+  if (previous && Object.values(state.research_review_events || {}).some(event => event.record_id === record.id)) throw new Error("Use review events for a reviewed record");
   const saved = previous ? { ...previous, direction: record.direction, reason: record.reason.trim(), risks: record.risks.trim(),
     invalidation: record.invalidation?.trim() || null, review_date: record.review_date || null, updated_at: new Date().toISOString() }
     : { ...record, reason: record.reason.trim(), risks: record.risks.trim(), invalidation: record.invalidation?.trim() || null };
   const records = { ...state.research_records, [saved.id]: saved };
-  if (JSON.stringify({ research_records: records }).length > 240000) throw new Error("Research storage limit reached");
+  if (JSON.stringify({ research_records: records, research_review_events: state.research_review_events }).length > 240000) throw new Error("Research storage limit reached");
   return { ...state, research_records: records };
 }
 export function researchRecords(state: UserState): ResearchRecord[] {

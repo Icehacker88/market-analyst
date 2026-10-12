@@ -1,3 +1,5 @@
+import { dueResearchRecords } from "./research-record-review";
+import { normalizeUserState } from "./user-state";
 import type { AlertHistory, Asset, Forecast, History, PriceAlert, ResearchReview, UserState } from "./types";
 
 export type ResearchBaseline = NonNullable<UserState["forecast_snapshots"]>;
@@ -6,6 +8,7 @@ export type { ResearchDataEntry } from "./my-research-data";
 import { RESEARCH_FRESH_MS, type ResearchDataEntry } from "./my-research-data";
 export type ResearchEntries = Record<string, ResearchDataEntry>;
 export type ResearchReason =
+  | { id: string; kind: "record_review_due"; record: import("./types").ResearchRecord; dueDate: string }
   | { id: string; kind: "review_due"; review: ResearchReview }
   | { id: string; kind: "direction_change"; previous: ResearchSnapshot; current: ResearchSnapshot; pendingConfirmation?: boolean }
   | { id: string; kind: "price_condition"; alert: PriceAlert; current: number; dataAsOf: string }
@@ -179,13 +182,15 @@ export function deriveResearchCoverage(symbols: readonly string[], entries: Rese
   return coverage;
 }
 
-export function buildResearchQueue({ symbols, reviews = {}, alerts = [], alertHistory = [], baseline, entries, now = new Date() }: {
+export function buildResearchQueue({ symbols, reviews = {}, alerts = [], alertHistory = [], baseline, entries, records = {}, reviewEvents = {}, now = new Date() }: {
   symbols: readonly string[];
   reviews?: Record<string, ResearchReview>;
   alerts?: PriceAlert[];
   alertHistory?: AlertHistory[];
   baseline: ResearchBaseline;
   entries: ResearchEntries;
+  records?: UserState["research_records"];
+  reviewEvents?: UserState["research_review_events"];
   now?: Date;
 }): ResearchTask[] {
   const tasks = new Map<string, ResearchTask>();
@@ -196,10 +201,14 @@ export function buildResearchQueue({ symbols, reviews = {}, alerts = [], alertHi
     // price rule. Do not infer P0 from the current model or from an ordinary price alert.
     const task = tasks.get(key) || { symbol: key, priority: 1, reasons: [] };
     if (!task.reasons.some((item) => item.id === reason.id)) task.reasons.push(reason);
-    if (reason.kind === "review_due") task.dueAt = reason.review.due_at;
+    if (reason.kind === "review_due" && (!task.dueAt || reason.review.due_at < task.dueAt)) task.dueAt = reason.review.due_at;
+    if (reason.kind === "record_review_due" && (!task.dueAt || reason.dueDate < task.dueAt)) task.dueAt = reason.dueDate;
     tasks.set(key, task);
   };
 
+  for (const { record, dueDate } of dueResearchRecords(normalizeUserState({ research_records: records, research_review_events: reviewEvents }), now)) {
+    add(record.symbol, { id: `record:${record.id}`, kind: "record_review_due", record, dueDate });
+  }
   for (const review of Object.values(reviews)) {
     const due = Date.parse(review.due_at);
     if (Number.isFinite(due) && due <= now.getTime()) add(review.symbol, { id: `review:${review.symbol.toUpperCase()}`, kind: "review_due", review });

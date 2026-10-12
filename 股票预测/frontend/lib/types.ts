@@ -221,7 +221,17 @@ export type ResearchReview = {
   trigger_price?: number | null;
   data_as_of?: string | null;
 };
+export type ResearchJudgment = { direction: "bullish" | "bearish" | "neutral"; reason: string; risks: string; invalidation: string | null; review_date: string | null };
+export type ResearchReviewEvent = {
+  version: 1; id: string; record_id: string; parent_event_id: string | null; reviewed_at: string;
+  outcome: "maintain" | "adjust" | "archive"; direction: ResearchJudgment["direction"];
+  reason: string; risk_changes: string; next_review_date: string | null;
+  current_snapshot: ResearchRecord["snapshot"];
+  data_status: string; client_received_at: string | null;
+};
 export type ResearchRecord = {
+  /** Present only on newly saved records; legacy initial versions are not inferred. */
+  initial_judgment?: ResearchJudgment;
   version: 1;
   id: string;
   symbol: string;
@@ -279,6 +289,7 @@ export type UserState = {
   decision_profiles?: Record<string, DecisionProfile>;
   research_reviews?: Record<string, ResearchReview>;
   research_records?: Record<string, ResearchRecord>;
+  research_review_events?: Record<string, ResearchReviewEvent>;
   research_preferences?: {
     market: "global" | "us" | "a" | "hk";
     goal: "opportunity" | "risk" | "learn";
