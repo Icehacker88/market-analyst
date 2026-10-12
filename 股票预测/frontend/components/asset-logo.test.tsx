@@ -35,9 +35,22 @@ describe("asset logo coverage", () => {
     load.mockResolvedValueOnce(new Blob(["image"]));
     const { container, unmount } = render(<AssetLogo asset={asset} />);
     await waitFor(() => expect(container.querySelector("img")?.src).toBe("blob:logo"));
+    expect(container.querySelector("svg")).not.toBeNull();
+    fireEvent.load(container.querySelector("img")!);
+    expect(container.querySelector("svg")).toBeNull();
     fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("svg")).not.toBeNull();
     expect(container.querySelector("img")).toBeNull(); expect(load).toHaveBeenCalledTimes(1);
     unmount(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:logo");
+  });
+  it("removes the backing chart for transparent local logos and resets for a different logo", () => {
+    const { container, rerender } = render(<AssetLogo asset={ASSET_CATALOG.find(item => item.symbol === "QQQ")!} />);
+    fireEvent.load(container.querySelector("img")!);
+    expect(container.querySelector("svg")).toBeNull();
+    rerender(<AssetLogo asset={ASSET_CATALOG.find(item => item.symbol === "SMH")!} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    fireEvent.load(container.querySelector("img")!);
+    expect(container.querySelector("svg")).toBeNull();
   });
   it("defers fetching until near viewport and ignores responses after unmount", async () => {
     let intersect!: (entries: { isIntersecting: boolean }[]) => void;
