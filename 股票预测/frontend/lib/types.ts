@@ -221,6 +221,36 @@ export type ResearchReview = {
   trigger_price?: number | null;
   data_as_of?: string | null;
 };
+export type ResearchRecord = {
+  version: 1;
+  id: string;
+  symbol: string;
+  asset_name: string;
+  currency: string | null;
+  direction: "bullish" | "bearish" | "neutral";
+  reason: string;
+  risks: string;
+  invalidation: string | null;
+  /** User-selected calendar date; not an automatic trigger or review-plan replacement. */
+  review_date: string | null;
+  created_at: string;
+  updated_at: string;
+  snapshot: {
+    reference_price: number | null;
+    market_data_as_of: string | null;
+    forecast: {
+      signal: "Up" | "Down" | "Observe" | null;
+      return_1d: number | null;
+      return_5d: number | null;
+      return_1m: number | null;
+      data_as_of: string | null;
+      generated_at: string | null;
+      model: string | null;
+      model_version: string | null;
+      optimization_version: string | null;
+    } | null;
+  };
+};
 export type NotificationPreferences = {
   email_enabled: boolean;
   browser_enabled: boolean;
@@ -248,6 +278,7 @@ export type UserState = {
   forecast_snapshots?: Record<string, { signal: string; confidence: number | null; invalidation: number | null; data_as_of: string; price?: number | null }>;
   decision_profiles?: Record<string, DecisionProfile>;
   research_reviews?: Record<string, ResearchReview>;
+  research_records?: Record<string, ResearchRecord>;
   research_preferences?: {
     market: "global" | "us" | "a" | "hk";
     goal: "opportunity" | "risk" | "learn";

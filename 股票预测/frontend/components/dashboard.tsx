@@ -15,6 +15,7 @@ import { scheduleBackgroundTask } from "@/lib/network";
 import { addSymbol, parseSymbols, removeSymbol, startForRange } from "@/lib/selection";
 import type { Asset, CompanyResearch, CompareSeries, Forecast, History, Performance, PeriodReturns, PredictionHistory } from "@/lib/types";
 import type { DetailDataKind } from "./detail-panel";
+import { ResearchRecordEntry } from "./research-records";
 import { OverviewCard } from "./overview-card";
 import { ComparisonDecisionTable } from "./comparison-decision-table";
 import { PeriodReturnStrip } from "./period-return-strip";
@@ -66,7 +67,7 @@ function mergePeriodReturns(previous: PeriodReturns | undefined, incoming: Perio
   };
 }
 
-export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }) {
+export function Dashboard({ initialSymbols = [], enableResearchRecords = false }: { initialSymbols?: string[]; enableResearchRecords?: boolean }) {
   const { privateStorage, language, t } = useApp();
   const router = useRouter();
   const params = useSearchParams();
@@ -415,6 +416,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
           updateSymbols(result.symbols, optimistic.symbol);
         }
       }} onOpen={(asset) => router.push(assetPath(asset.symbol))} onAlert={(asset) => router.push(`/favorites/?alert=${encodeURIComponent(asset.symbol)}`)} onRemove={(symbol) => { setLimitReached(false); updateSymbols(removeSymbol(symbols, symbol)); }} onClear={() => updateSymbols([])} />
+      {enableResearchRecords && active && assets.find(asset => asset.symbol === active) && <ResearchRecordEntry key={active} asset={assets.find(asset => asset.symbol === active)!} history={bundles[active]?.history || bundles[active]?.summary} forecast={bundles[active]?.forecast} />}
       <section className="control-row">
         <label className="switch-label">{normalized ? t("normalized") : t("actual")}<button className={`switch ${normalized ? "on" : ""}`} onClick={() => { const next = !normalized; setNormalized(next); updateView({ normalized: next }); }} aria-pressed={normalized}><i /></button></label>
       </section>

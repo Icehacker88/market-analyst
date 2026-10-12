@@ -8,7 +8,8 @@ import { observeWebVitals, trackEvent } from "@/lib/analytics";
 import { listQueuedStatePatches, queueStatePatch, removeQueuedStatePatch } from "@/lib/offline-store";
 import { DEFAULT_USER_STATE, applyUserStatePatch, hasStatePatch, normalizeUserState, statePatch } from "@/lib/user-state";
 import { createPrivateStorage, privateScope, type PrivateStorage } from "@/lib/private-storage";
-import type { Asset, UserState } from "@/lib/types";
+import { upsertResearchRecord } from "@/lib/research-record";
+import type { Asset, ResearchRecord, UserState } from "@/lib/types";
 import { AuthProvider, useAuth } from "./auth-provider";
 import { PwaRuntime } from "./pwa-runtime";
 
@@ -23,6 +24,7 @@ type AppContextValue = {
   isFavorite: (symbol: string) => boolean;
   userState: UserState;
   updateUserState: (update: (current: UserState) => UserState) => void;
+  saveResearchRecord: (record: ResearchRecord) => Promise<"saved" | "failed">;
   cloudSyncing: boolean;
   privateStorage: PrivateStorage;
 };
@@ -102,7 +104,8 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
         if (!active()) return;
         for (const item of queued) {
           if (!active()) return;
-          const saved = await saveUserStatePatch(item.patch, options);
+          const queuedPatch = item.patch.research_records ? { ...item.patch, research_records: { ...syncedState.current.research_records, ...item.patch.research_records } } : item.patch;
+          const saved = await saveUserStatePatch(queuedPatch, options);
           if (!active()) return;
           syncedState.current = normalizeUserState(saved);
           await removeQueuedStatePatch(userId, item.id);
@@ -222,6 +225,27 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
     persistState(update(latestState.current));
   }, [pending, persistState]);
 
+  const saveResearchRecord = useCallback(async (record: ResearchRecord): Promise<"saved" | "failed"> => {
+    if (!lifecycle.current.active || pending) return "failed";
+    try {
+      const next = normalizeUserState(upsertResearchRecord(latestState.current, record));
+      const serialized = JSON.stringify(next);
+      privateStorage.setItem("orivane-user-state", serialized);
+      // Private storage is best-effort; never report a durable save without a read-back.
+      if (privateStorage.getItem("orivane-user-state") !== serialized) return "failed";
+      if (userId) {
+        const item = await queueStatePatch(userId, { research_records: next.research_records });
+        const queued = await listQueuedStatePatches(userId);
+        if (!lifecycle.current.active) return "failed";
+        if (!queued.some((entry) => entry.id === item.id)) return "failed";
+      }
+      if (!lifecycle.current.active) return "failed";
+      // Merge only records so unrelated edits during queue persistence are retained.
+      persistState(upsertResearchRecord(latestState.current, record));
+      return "saved";
+    } catch { return "failed"; }
+  }, [pending, persistState, privateStorage, userId]);
+
   const toggleFavorite = useCallback((asset: Asset) => {
     if (!lifecycle.current.active || pending) return;
     const exists = favorites.some((item) => item.symbol === asset.symbol);
@@ -255,8 +279,9 @@ function AppStateProvider({ children, userId, pending }: { children: React.React
     userState,
     updateUserState,
     cloudSyncing,
+    saveResearchRecord,
     privateStorage,
-  }), [cloudSyncing, favorites, language, privateStorage, theme, toggleFavorite, updateUserState, userState]);
+  }), [cloudSyncing, favorites, language, privateStorage, saveResearchRecord, theme, toggleFavorite, updateUserState, userState]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

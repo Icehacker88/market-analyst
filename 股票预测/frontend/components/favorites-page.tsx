@@ -10,6 +10,7 @@ import { trackEvent } from "@/lib/analytics";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { DEFAULT_NOTIFICATION_PREFERENCES } from "@/lib/user-state";
 import type { Asset, PriceAlert } from "@/lib/types";
+import { ResearchRecords } from "./research-records";
 import { MyResearchWorkspace } from "./my-research-workspace";
 import s from "./my-research.module.css";
 import { ResearchNavigation } from "./research-navigation";
@@ -114,6 +115,7 @@ export function FavoritesPage() {
   return <main className={`page-shell favorites-page ${s.page}`}><header className="page-title"><div><h1>{zh ? "我的研究" : "My research"}</h1><p><Cloud size={13} />{cloudSyncing ? (zh ? "正在同步" : "Syncing") : user ? (zh ? "本机保存；云端同步状态未确认" : "Saved locally; cloud sync status unconfirmed") : (zh ? "未登录 · 研究数据保存在本机" : "Signed out · Research data stays on this device")}</p></div><Link href="/" className="primary-link">{t("openDashboard")}<ArrowRight size={15} /></Link></header>
     <ResearchNavigation />
     <MyResearchWorkspace onPresetAlert={addPresetAlert} />
+    <ResearchRecords />
     {testMessage && <p className="alert-message" role="status">{testMessage}</p>}
     <details className={s.settings} id="research-settings"><summary>{zh ? "列表、提醒与通知设置" : "Lists, alerts and notification settings"}</summary>
     <section className="watchlist-manager"><header><strong>{zh ? "我的列表" : "My lists"}</strong><div><input value={listName} onChange={(event) => setListName(event.target.value)} placeholder={zh ? "新列表名称" : "New list name"} /><button onClick={addList}><Plus size={14} />{zh ? "新建" : "Create"}</button></div></header><div>{userState.watchlists.map((list, index) => <article key={list.id}><span><strong>{index === 0 ? (zh ? "默认收藏" : "Favorites") : list.name}</strong><small>{list.symbols.length} {zh ? "个资产" : "assets"}</small></span>{index > 0 && <button onClick={() => updateUserState((current) => ({ ...current, watchlists: current.watchlists.filter((item) => item.id !== list.id) }))}><Trash2 size={14} /></button>}</article>)}</div></section>

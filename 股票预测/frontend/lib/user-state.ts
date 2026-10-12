@@ -18,6 +18,7 @@ export const DEFAULT_USER_STATE: UserState = {
   portfolios: [],
   savedScreeners: [],
   research_reviews: {},
+  research_records: {},
   updated_at: null,
   state_revision: 0,
   daily_summary_enabled: true,
@@ -37,6 +38,7 @@ export function normalizeUserState(value?: Partial<UserState> | null): UserState
     portfolios: value?.portfolios || [],
     savedScreeners: value?.savedScreeners || [],
     research_reviews: value?.research_reviews || {},
+    research_records: value?.research_records || {},
     notification_preferences: { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(value?.notification_preferences || {}) },
     ai_chats: value?.ai_chats || {},
   };
@@ -54,7 +56,10 @@ export function statePatch(previous: UserState, next: UserState): Partial<UserSt
 }
 
 export function applyUserStatePatch(current: UserState, patch: Partial<UserState>): UserState {
-  return normalizeUserState({ ...current, ...patch });
+  return normalizeUserState({ ...current, ...patch,
+    // Research records have stable IDs and no deletion operation in Round 1.
+    research_records: { ...current.research_records, ...patch.research_records },
+  });
 }
 
 export function hasStatePatch(patch: Partial<UserState>): boolean {
