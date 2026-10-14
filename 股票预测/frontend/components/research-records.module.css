@@ -41,3 +41,10 @@
 .reviewDialog summary { min-height: 44px; padding: 10px 0; cursor: pointer; }
 .reviewContext h3, .reviewHistory h4 { margin: 0 0 8px; font-size: 14px; }
 .reviewHistory section { border-top: 1px solid var(--border); padding: 14px 0; }
+
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.savedNotice { display: block; padding: 12px 14px; margin: 12px 0; border: 1px solid var(--accent); border-radius: 8px; background: var(--surface); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.savedNotice a { color: var(--accent); display: inline-block; padding: 8px 4px; min-height: 44px; }
+.reviewHistory section { scroll-margin-top: 90px; }
+.reviewHistory section:target { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+.dialog form > p[role="status"] { font-size: 12px; color: var(--muted); line-height: 1.6; }

@@ -82,8 +82,8 @@ export function Header() {
         <Link href="/recommendations" className={`icon-button labeled ${active("/recommendations") ? "active" : ""}`} aria-label={language === "zh" ? "推荐" : "Recommendations"}><Sparkles size={16} /><span>{language === "zh" ? "推荐" : "Picks"}</span></Link>
         <Link href="/track-record" className={`icon-button labeled ${active("/track-record") ? "active" : ""}`} aria-label={language === "zh" ? "预测成绩" : "Forecast record"}><Gauge size={16} /><span>{language === "zh" ? "成绩" : "Record"}</span></Link>
         <Link href="/screener" className={`icon-button labeled ${active("/screener") ? "active" : ""}`} aria-label={language === "zh" ? "选股器" : "Screener"}><ListFilter size={16} /><span>{language === "zh" ? "选股" : "Screener"}</span></Link>
-        <Link href="/favorites" className={`icon-button labeled ${active("/favorites") ? "active" : ""}`} aria-label={t("favorites")}>
-          <Bookmark size={16} /> <span>{t("favorites")}</span><b>{unreadNotifications || favorites.length}</b>
+        <Link href="/favorites" className={`icon-button labeled ${active("/favorites") ? "active" : ""}`} aria-label={language === "zh" ? "我的研究" : "My research"}>
+          <Bookmark size={16} /> <span>{language === "zh" ? "我的研究" : "My research"}</span><b>{unreadNotifications || favorites.length}</b>
         </Link>
         <button className="icon-button labeled account-button" onClick={() => setAuthOpen(true)} aria-label={user ? t("account") : t("login")}>
           {user?.pictureUrl ? <img src={user.pictureUrl} alt="" referrerPolicy="no-referrer" /> : <UserRound size={16} />}<span>{user?.name || user?.email || t("login")}</span>
@@ -105,7 +105,7 @@ export function Header() {
         <Link href="/" className={active("/") ? "active" : ""}><Home size={19} /><span>{language === "zh" ? "首页" : "Home"}</span></Link>
         <Link href="/recommendations" className={active("/recommendations") ? "active" : ""}><Sparkles size={19} /><span>{language === "zh" ? "推荐" : "Picks"}</span></Link>
         <Link href="/screener" className={active("/screener") ? "active" : ""}><ListFilter size={19} /><span>{language === "zh" ? "选股" : "Screen"}</span></Link>
-        <Link href="/favorites" className={active("/favorites") ? "active" : ""}><Bookmark size={19} /><span>{language === "zh" ? "收藏" : "Saved"}</span>{(unreadNotifications || favorites.length) > 0 && <b>{unreadNotifications || favorites.length}</b>}</Link>
+        <Link href="/favorites" className={active("/favorites") ? "active" : ""}><Bookmark size={19} /><span>{language === "zh" ? "我的研究" : "My research"}</span>{(unreadNotifications || favorites.length) > 0 && <b>{unreadNotifications || favorites.length}</b>}</Link>
         <button className={moreOpen ? "active" : ""} onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen} aria-controls="header-more-menu"><Menu size={19} /><span>{language === "zh" ? "更多" : "More"}</span></button>
       </nav>
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />

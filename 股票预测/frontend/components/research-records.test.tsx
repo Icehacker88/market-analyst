@@ -48,7 +48,7 @@ describe("Research Record usable local save flows", () => {
   const original = Object.values(state().research_records!)[0]; expect(original.snapshot).toEqual({ reference_price: null, market_data_as_of: null, forecast: null });
   expect(original.review_date).toBe("2026-11-01"); expect(state().research_reviews).toEqual({});
   expect(createPrivateStorage("guest").getItem("orivane-user-state")).toContain("Demand remains strong");
-  cleanup(); mount(); await ready(); await waitFor(() => expect(screen.getByText("Demand remains strong")).toBeInTheDocument());
+  cleanup(); mount(); await ready(); await waitFor(() => expect(screen.getAllByText("Demand remains strong").length).toBeGreaterThan(0));
   fireEvent.click(screen.getByRole("button", { name: "编辑判断" })); fireEvent.change(screen.getByLabelText("判断理由"), { target: { value: "Updated view" } }); await save();
   expect(Object.values(state().research_records!)).toEqual([expect.objectContaining({ id: original.id, reason: "Updated view", created_at: original.created_at, snapshot: original.snapshot })]);
   expect(screen.getByRole("link", { name: "返回资产详情" })).toHaveAttribute("href", "/stocks/nvda");
@@ -56,7 +56,7 @@ describe("Research Record usable local save flows", () => {
  it("retains input and avoids success or memory-only records when local persistence fails", async () => {
   mount(); await ready(); await fill(); const broken = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw Error("quota"); });
   fireEvent.click(screen.getByRole("button", { name: "保存判断" }));
-  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存未确认"));
+  await waitFor(() => expect(screen.getAllByRole("alert").some(node => node.textContent?.includes("保存未确认"))).toBe(true));
   expect(screen.getByLabelText("判断理由")).toHaveValue("Demand remains strong"); expect(state().research_records).toEqual({});
   broken.mockRestore(); await save(); expect(Object.keys(state().research_records!)).toHaveLength(1);
  });
@@ -64,7 +64,7 @@ describe("Research Record usable local save flows", () => {
   user = { id: "alice", email: "alice@example.test" }; vi.mocked(api.saveUserStatePatch).mockRejectedValue(new Error("offline"));
   mount(); await ready("alice"); await waitFor(() => expect(api.getUserState).toHaveBeenCalled()); await fill("Alice judgment"); await save();
   await waitFor(async () => expect(await listQueuedStatePatches("alice")).not.toHaveLength(0));
-  cleanup(); mount(); await ready("alice"); await waitFor(() => expect(screen.getByText("Alice judgment")).toBeInTheDocument());
+  cleanup(); mount(); await ready("alice"); await waitFor(() => expect(screen.getAllByText("Alice judgment").length).toBeGreaterThan(0));
   expect(screen.queryByText("已同步")).not.toBeInTheDocument();
   vi.mocked(api.saveUserStatePatch).mockImplementation(async patch => remote = normalizeUserState({ ...remote, ...patch }));
   await act(async () => { window.dispatchEvent(new Event("online")); });
@@ -75,7 +75,7 @@ describe("Research Record usable local save flows", () => {
   mount(); await ready(); await fill("Guest judgment"); await save(); cleanup();
   user = { id: "alice", email: "alice@example.test" }; mount(); await ready("alice"); expect(screen.queryByText("Guest judgment")).not.toBeInTheDocument();
   await fill("Alice private judgment"); await save();
-  fireEvent.click(screen.getByText("logout")); await ready(); expect(screen.queryByText("Alice private judgment")).not.toBeInTheDocument(); await waitFor(() => expect(screen.getByText("Guest judgment")).toBeInTheDocument());
+  fireEvent.click(screen.getByText("logout")); await ready(); expect(screen.queryByText("Alice private judgment")).not.toBeInTheDocument(); await waitFor(() => expect(screen.getAllByText("Guest judgment").length).toBeGreaterThan(0));
   vi.mocked(api.saveUserStatePatch).mockClear(); fireEvent.click(screen.getByText("login bob")); await ready("bob");
   expect(screen.queryByText("Guest judgment")).not.toBeInTheDocument(); expect(screen.queryByText("Alice private judgment")).not.toBeInTheDocument();
   await fill("Bob judgment"); await save(); await waitFor(() => expect(api.saveUserStatePatch).toHaveBeenCalled());
@@ -89,8 +89,8 @@ describe("Research Record usable local save flows", () => {
   vi.mocked(api.getUserState).mockRejectedValueOnce(Error("offline"));
   mount(); await ready("alice"); await fill("New offline view"); await save();
   cleanup(); mount(); await ready("alice");
-  await waitFor(() => expect(screen.getByText("Older cloud view")).toBeInTheDocument());
-  expect(screen.getByText("New offline view")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getAllByText("Older cloud view").length).toBeGreaterThan(0));
+  expect(screen.getAllByText("New offline view").length).toBeGreaterThan(0);
   await waitFor(() => expect(Object.keys(remote.research_records!)).toHaveLength(2));
  });
  it("preserves an existing review plan in legacy state when adding a record", async () => {

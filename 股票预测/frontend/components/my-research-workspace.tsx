@@ -6,17 +6,22 @@ import { assetPath, catalogAssetBySymbol } from "@/lib/asset-catalog";
 import { canonicalSymbol, displayAssetName } from "@/lib/assets";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { buildResearchQueue, researchSemantics, deriveResearchCoverage, readResearchBaseline, seedResearchBaseline, writeResearchBaseline, type ResearchReason, type ResearchDataEntry } from "@/lib/my-research";
-import type { Asset, PriceAlert, ResearchReview } from "@/lib/types";
+import type { Asset, PriceAlert, ResearchReview, ResearchReviewEvent } from "@/lib/types";
 import { AppLink as Link } from "./app-link";
-import { ResearchReviewButton } from "./research-review";
+import { ResearchReviewButton, ReviewSavedNotice, ReviewEventLink } from "./research-review";
 import { AssetLogo } from "./asset-logo";
 import { useApp } from "./providers";
+import { researchRecords } from "@/lib/research-record";
+import { recordTracking } from "@/lib/research-record-review";
 import { useMyResearch } from "./use-my-research";
 import s from "./my-research.module.css";
 
 export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: Asset, type: PriceAlert["type"], value: number | string) => void }) {
   const { userState, favorites, privateStorage, language, toggleFavorite, updateUserState } = useApp();
   const zh = language === "zh";
+  const [completed, setCompleted] = useState<ResearchReviewEvent | null>(null);
+  const records = researchRecords(userState);
+  const recentReview = records.flatMap(record => recordTracking(record, userState).events).sort((a, b) => b.reviewed_at.localeCompare(a.reviewed_at))[0];
   // Membership comes from the saved lists, never from a truncated/failed identity lookup.
   const symbols = [...new Set(userState.watchlists.flatMap((list) => list.symbols).map(canonicalSymbol).filter(Boolean))];
   const { entries, loading, lastCheckedAt, refresh } = useMyResearch(symbols);
@@ -79,13 +84,15 @@ export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: 
     {!baselineStored && <p className={s.warning} role="alert">{zh ? "比较基准未能保存到本机；本次仍可查看数据，下次访问可能需要重新建立基准。" : "The baseline could not be saved locally. Data remains usable, but the next visit may need a new baseline."}</p>}
     <section className={s.section} aria-labelledby="research-actions-title">
       <header><h2 id="research-actions-title" tabIndex={-1}>{zh ? "今天需要处理" : "Today’s action queue"}</h2><span>{zh ? `${tasks.length} 个资产` : `${tasks.length} assets`}</span></header>
+      {completed ? <ReviewSavedNotice event={completed} /> : recentReview && <p className={s.note}>{zh ? "最近完成的复核" : "Most recent review"} · {date(recentReview.reviewed_at, zh)} <ReviewEventLink event={recentReview} /></p>}
+      {!tasks.length && records.length > 0 && <p role="status" className={s.empty}>{zh ? "当前没有待处理的复核" : "No reviews currently require action"}</p>}
       {tasks.length ? <div className={s.queue}>{tasks.map((task) => <article className={s.task} key={task.symbol} data-testid="research-task">
         <header>{title(task.symbol)}<span className={s.priority}>{zh ? "待复核" : "Review needed"}</span></header>
-        <ul>{task.reasons.map((reason) => <li key={reason.id}>{reasonText(reason, zh)}{reason.kind === "record_review_due" && <ResearchReviewButton record={reason.record} compact />}</li>)}</ul>
+        <ul>{task.reasons.map((reason) => <li key={reason.id}>{reasonText(reason, zh)}{reason.kind === "record_review_due" && <ResearchReviewButton record={reason.record} compact onSaved={setCompleted} />}</li>)}</ul>
         {userState.research_reviews?.[task.symbol] && <ReviewContext review={userState.research_reviews[task.symbol]} zh={zh} />}
         <footer><Link className={s.primary} href={assetPath(task.symbol)}>{zh ? "进入研究" : "Open research"}<ArrowRight size={14} /></Link><small>{zh ? "打开研究不会清除事项" : "Opening does not dismiss this item"}</small></footer>
-      </article>)}</div> : <p className={s.empty} role="status">{!symbols.length && !Object.keys(userState.research_reviews || {}).length ? (zh ? "先研究一只资产，关注或保存复核计划后，这里会汇总需要处理的事项。" : "Research an asset, then follow it or save a review plan to build your queue.") : unconfirmed ? (zh ? "尚不能确认全部关注资产的变化；请查看失败、缺失、缓存和未检查状态。" : "Changes cannot yet be confirmed for the entire watchlist. Check failed, missing, stale and unchecked states.") : noBaseline ? (zh ? "尚无历史比较基准；首次成功数据作为本机基准，下次访问开始比较。" : "No earlier comparison baseline. The first successful data provides a local baseline for your next visit.") : (zh ? "已检查的资产暂无需要处理的重要变化或到期计划。" : "Checked assets have no meaningful changes or due plans requiring action.")}</p>}
-      {Object.values(userState.research_reviews || {}).some((review) => Date.parse(review.due_at) > now) && <details className={s.scheduled}><summary>{zh ? "查看尚未到期的复核计划" : "View upcoming review plans"}</summary>{Object.values(userState.research_reviews || {}).filter((review) => Date.parse(review.due_at) > now).sort((a, b) => Date.parse(a.due_at) - Date.parse(b.due_at)).map((review) => <article key={review.symbol}><Link href={assetPath(review.symbol)}>{title(review.symbol)}</Link><ReviewContext review={review} zh={zh} /></article>)}</details>}
+      </article>)}</div> : records.length > 0 && !symbols.length ? null : <p className={s.empty} role="status">{!records.length && !symbols.length && !Object.keys(userState.research_reviews || {}).length ? (zh ? "先研究一只资产，关注或保存复核计划后，这里会汇总需要处理的事项。" : "Research an asset, then follow it or save a review plan to build your queue.") : unconfirmed ? (zh ? "尚不能确认全部关注资产的变化；请查看失败、缺失、缓存和未检查状态。" : "Changes cannot yet be confirmed for the entire watchlist. Check failed, missing, stale and unchecked states.") : noBaseline ? (zh ? "尚无历史比较基准；首次成功数据作为本机基准，下次访问开始比较。" : "No earlier comparison baseline. The first successful data provides a local baseline for your next visit.") : (zh ? "已检查的资产暂无需要处理的重要变化或到期计划。" : "Checked assets have no meaningful changes or due plans requiring action.")}</p>}
+      {Object.values(userState.research_reviews || {}).some((review) => Date.parse(review.due_at) > now) && <details className={s.scheduled}><summary>{zh ? "查看尚未到期的价格/条件复核计划" : "View upcoming price / condition plans"}</summary>{Object.values(userState.research_reviews || {}).filter((review) => Date.parse(review.due_at) > now).sort((a, b) => Date.parse(a.due_at) - Date.parse(b.due_at)).map((review) => <article key={review.symbol}><Link href={assetPath(review.symbol)}>{title(review.symbol)}</Link><ReviewContext review={review} zh={zh} /></article>)}</details>}
       {tasks.length > 0 && unconfirmed > 0 && <p className={s.note}>{zh ? "队列包含已有计划和历史提醒；部分数据尚未确认，不能据此判断其他资产没有变化。" : "The queue includes saved plans and historical alerts. Incomplete checks do not imply no changes elsewhere."}</p>}
     </section>
 
@@ -122,11 +129,11 @@ export function MyResearchWorkspace({ onPresetAlert }: { onPresetAlert: (asset: 
 
 function ReviewContext({ review, zh }: { review: ResearchReview; zh: boolean }) {
   const labels = { next_session: zh ? "预定日期复核" : "Scheduled review", breakout: zh ? "计划：突破关键位时复核" : "Plan: review on breakout", pullback: zh ? "计划：回踩支撑时复核" : "Plan: review on pullback", invalidation: zh ? "计划：触及失效位时复核" : "Plan: review at invalidation" };
-  return <div className={s.review}><strong>{labels[review.reason]}</strong><span>{zh ? "预定复核" : "Due"} {date(review.due_at, zh)} · {zh ? "参考价" : "Reference price"} {metric(review.reference_price, false)} · {zh ? "计划关键位" : "Planned level"} {metric(review.trigger_price, false)}</span>{review.reason !== "next_session" && <small>{zh ? "按预定日期提示；当前未确认该价格条件已触发。" : "Scheduled by date; this price condition has not been confirmed as triggered."}</small>}<small>{zh ? "本轮仅保留计划，不提供完成结果或历史归档。" : "This is a plan, without completion results or an archive."}</small></div>;
+  return <div className={s.review}><strong>{labels[review.reason]}</strong><span>{zh ? "预定复核" : "Due"} {date(review.due_at, zh)} · {zh ? "参考价" : "Reference price"} {metric(review.reference_price, false)} · {zh ? "计划关键位" : "Planned level"} {metric(review.trigger_price, false)}</span>{review.reason !== "next_session" && <small>{zh ? "按预定日期提示；当前未确认该价格条件已触发。" : "Scheduled by date; this price condition has not been confirmed as triggered."}</small>}<small>{zh ? "这是独立的价格/条件复核计划，不属于研究判断的复核历史。" : "A separate price / condition plan, outside judgment review history."}</small></div>;
 }
 function reasonText(reason: ResearchReason, zh: boolean): string {
   if (reason.kind === "record_review_due") return `${zh ? "研究判断到期" : "Judgment review due"} · ${reason.dueDate} · ${reason.record.reason.slice(0, 80)} · `;
-  if (reason.kind === "review_due") return `${zh ? "计划已到复核时间" : "Scheduled review is due"} · ${date(reason.review.due_at, zh)}`;
+  if (reason.kind === "review_due") return `${zh ? "价格/条件计划已到复核时间" : "Price / condition plan is due"} · ${date(reason.review.due_at, zh)}`;
   if (reason.kind === "direction_change") return `${reason.pendingConfirmation ? (zh ? "上次数据方向变化（待更新确认）" : "Last known reversal (refresh unconfirmed)") : (zh ? "预测方向实质变化" : "Material forecast reversal")}：${signal(reason.previous.signal, zh)} → ${signal(reason.current.signal, zh)}`;
   if (reason.kind === "price_condition") return `${zh ? "用户条件命中" : "User condition met"} · ${alertType(reason.alert.type, zh)} ${reason.alert.value}${reason.alert.type === "change" ? "%" : ""} · ${zh ? "当前" : "Current"} ${formatNumber(reason.current)}${reason.alert.type === "change" ? "%" : ""} · ${reason.dataAsOf}`;
   return `${zh ? "历史提醒" : "Recorded alert"} · ${alertType(reason.alert.type, zh)} · ${date(reason.history.triggered_at, zh)}${reason.history.read_at ? (zh ? " · 已读，未代表已复核" : " · Read, not marked reviewed") : ""}`;

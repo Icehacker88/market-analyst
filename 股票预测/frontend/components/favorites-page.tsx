@@ -112,7 +112,7 @@ export function FavoritesPage() {
     const readAt = new Date().toISOString();
     updateUserState((current) => ({ ...current, alert_history: (current.alert_history || []).map((item) => item.read_at ? item : { ...item, read_at: readAt }) }));
   }
-  return <main className={`page-shell favorites-page ${s.page}`}><header className="page-title"><div><h1>{zh ? "我的研究" : "My research"}</h1><p><Cloud size={13} />{cloudSyncing ? (zh ? "正在同步" : "Syncing") : user ? (zh ? "本机保存；云端同步状态未确认" : "Saved locally; cloud sync status unconfirmed") : (zh ? "未登录 · 研究数据保存在本机" : "Signed out · Research data stays on this device")}</p></div><Link href="/" className="primary-link">{t("openDashboard")}<ArrowRight size={15} /></Link></header>
+  return <main className={`page-shell favorites-page ${s.page}`}><header className="page-title"><div><h1>{zh ? "我的研究" : "My research"}</h1><p><Cloud size={13} />{cloudSyncing ? (zh ? "正在同步" : "Syncing") : user ? (zh ? "已保存到本机，云端同步待确认" : "Saved locally; cloud sync status unconfirmed") : (zh ? "未登录 · 仅保存在此设备" : "Signed out · Research data stays on this device")}</p></div><Link href="/" className="primary-link">{t("openDashboard")}<ArrowRight size={15} /></Link></header>
     <ResearchNavigation />
     <MyResearchWorkspace onPresetAlert={addPresetAlert} />
     <ResearchRecords />

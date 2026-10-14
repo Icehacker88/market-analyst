@@ -66,7 +66,7 @@ describe("manual review persistence and UI", () => {
  });
  it("prevents double submission and reuses the event ID after a failed local save", async () => {
   seed();mount();await ready();await fillReview();const fail = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw Error("quota"); });
-  fireEvent.click(screen.getByRole("button", { name: "保存本次复核" }));await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存未确认"));
+  fireEvent.click(screen.getByRole("button", { name: "保存本次复核" }));await waitFor(() => expect(screen.getAllByRole("alert").some(node => node.textContent?.includes("保存未确认"))).toBe(true));
   expect(screen.getByLabelText("本次复核理由")).toHaveValue("Manual reassessment");expect(Object.keys(state().research_review_events!)).toHaveLength(0);
   fail.mockRestore();const button=screen.getByRole("button", { name: "保存本次复核" });fireEvent.click(button);fireEvent.click(button);await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());expect(Object.keys(state().research_review_events!)).toHaveLength(1);
  });
