@@ -1,11 +1,9 @@
-# Orivane UI workspace boundary
+# Orivane Authentication Round 1 workspace
 
 尽可能减少输出内容，专注做事。
 
-This checkout is for UI/product work on `codex/ui-preview-ff7fd40d`, based on source commit `400a2cdd4d441e2a302d23feb8380c64b69e30b2` (Preview ff7fd40d). Read `docs/version-isolation-2026-09-30.md` before release work.
+This isolated worktree uses `codex/authentication-round1`, based on stable product commit `aee719e6aec0ededdd7000d34807c8250708994e`. The user explicitly reopened password/signup/login work for local implementation and verification only. Do not merge or cherry-pick the old frozen authentication branch, or build from the original main/UI checkouts.
 
-Authentication/password development is frozen. Preserve existing deployed password, OAuth, session, administrator authorization, account isolation and Production configuration. Do not merge/cherry-pick `codex/auth-admin-frozen-20260930` or copy files/build output from the original dirty checkout. A separate explicit user instruction is required to reopen auth work.
+Preserve existing account UUIDs, KV sessions, user-state paths, Research Record/Review, homepage, read-only Snapshot and prediction algorithms. New credential writes require explicit enablement; registration remains disabled by default. Never log credentials, credential records or session tokens. Only synthetic accounts may be used in tests.
 
-Before a separately authorized Preview deployment, review the complete diff against `codex/preview-ff7fd40d-source`, verify frozen auth/config files and generated Worker, use only this checkout, confirm the Preview branch and all six isolated KV bindings, and skip SEO refresh. Do not use default deployment target inference, Production deployment, or optimizer/all deployment commands. Never deploy simply because code was committed.
-
-Product development cadence: one explicitly bounded round, one reviewed commit, then separately authorized Preview acceptance before the next round. Keep this worktree clean between rounds.
+No plan/billing changes, deployment, remote account mutation or Production configuration changes are authorized. Keep one bounded commit, a clean worktree, and stop for separate Preview authorization after local verification.

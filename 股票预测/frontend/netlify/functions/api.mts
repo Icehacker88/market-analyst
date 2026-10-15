@@ -3,6 +3,7 @@ import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
 import publicData from "./data/public-data.json" with { type: "json" };
 import { sendEmail } from "./_shared/market-email.ts";
+import { createPasswordCredential, dummyPasswordWork, verifyPassword, type PasswordCredential } from "./_shared/password";
 
 type Asset = {
   symbol: string;
@@ -260,7 +261,7 @@ type AiAnalysis = {
   questions: string[];
 };
 type AuthUser = { id: string; email: string; is_admin?: boolean; name?: string; pictureUrl?: string | null; confirmedAt?: string };
-type AuthRecord = AuthUser & { salt: string; password_hash: string; created_at: string; provider?: "email" | "google" | "apple"; google_sub?: string; apple_sub?: string; updated_at?: string };
+type AuthRecord = AuthUser & { password_credential?: PasswordCredential; salt: string; password_hash: string; created_at: string; provider?: "email" | "google" | "apple"; google_sub?: string; apple_sub?: string; updated_at?: string };
 type AuthSession = { token: string; user_id: string; email: string; expires_at: string };
 
 const CATALOG: Asset[] = [
@@ -3128,45 +3129,11 @@ function publicAuthUser(record: AuthRecord): AuthUser {
   };
 }
 
-function randomSalt(): string {
-  return crypto.randomUUID();
-}
-
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
-}
-
-async function legacyPasswordHash(password: string, salt: string): Promise<string> {
-  const data = new TextEncoder().encode(`${salt}:${password}`);
-  return bufferToBase64(await crypto.subtle.digest("SHA-256", data));
-}
-
-const PASSWORD_ITERATIONS = 210000;
-
-async function passwordHash(password: string, salt: string, iterations = PASSWORD_ITERATIONS): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const derived = await crypto.subtle.deriveBits({
-    name: "PBKDF2",
-    hash: "SHA-256",
-    salt: new TextEncoder().encode(salt),
-    iterations,
-  }, key, 256);
-  return `pbkdf2_sha256$${iterations}$${salt}$${bufferToBase64(derived)}`;
-}
-
-async function verifyPassword(password: string, record: AuthRecord): Promise<{ valid: boolean; needs_upgrade: boolean }> {
-  if (record.password_hash.startsWith("pbkdf2_sha256$")) {
-    const [, rawIterations, storedSalt, storedHash] = record.password_hash.split("$");
-    const iterations = Number(rawIterations);
-    if (!Number.isFinite(iterations) || !storedSalt || !storedHash) return { valid: false, needs_upgrade: false };
-    const candidate = await passwordHash(password, storedSalt, iterations);
-    return { valid: candidate === record.password_hash, needs_upgrade: iterations < PASSWORD_ITERATIONS };
-  }
-  const valid = record.password_hash === await legacyPasswordHash(password, record.salt);
-  return { valid, needs_upgrade: valid };
 }
 
 async function createAuthSession(user: AuthRecord, context?: Context): Promise<{ token: string; user: AuthUser }> {
@@ -3235,6 +3202,73 @@ async function currentUser(request: Request, context?: Context): Promise<AuthUse
   return userFromSessionToken(request, context).catch(() => null);
 }
 
+function authFailure(code: string, status: number): Response {
+  const messages: Record<string, string> = {
+    invalid_login: "Email or password is incorrect.",
+    signup_failed: "Unable to create an account with these details.",
+    validation_error: "Check your email and password. New passwords require at least 15 characters.",
+    challenge_failed: "Complete the security check and try again.",
+    too_many_attempts: "Too many attempts. Please try again later.",
+    signup_disabled: "Registration is not enabled.",
+    request_rejected: "Request rejected.",
+    auth_unavailable: "Authentication is temporarily unavailable. Please try again later.",
+  };
+  const response = privateJson({ error: { code, message: messages[code] || messages.auth_unavailable } }, status);
+  if (status === 429) response.headers.set("retry-after", "900");
+  return response;
+}
+function passwordAuthReady(): boolean {
+  return env.ORIVANE_PASSWORD_AUTH_ENABLED === "true" && Boolean(env.ORIVANE_TURNSTILE_SITE_KEY?.trim() && env.ORIVANE_TURNSTILE_SECRET_KEY?.trim());
+}
+function sameOriginMutation(request: Request): boolean {
+  return request.headers.get("origin") === new URL(request.url).origin && request.headers.get("sec-fetch-site") !== "cross-site";
+}
+async function passwordRequestBody(request: Request): Promise<Record<string, unknown>> {
+  if (request.headers.get("content-type")?.split(";")[0].trim() !== "application/json") throw new Error("Invalid content type");
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error("Missing body");
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      size += value.byteLength;
+      if (size > 16384) { await reader.cancel(); throw new Error("Body too large"); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try {
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
+    return body as Record<string, unknown>;
+  } finally { bytes.fill(0); for (const chunk of chunks) chunk.fill(0); }
+}
+async function passwordChallenge(request: Request, token: unknown, action: string): Promise<boolean> {
+  if (typeof token !== "string" || !token || token.length > 2048) return false;
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(8000),
+    body: JSON.stringify({ secret: env.ORIVANE_TURNSTILE_SECRET_KEY, response: token }),
+  });
+  if (!response.ok) throw new Error("Challenge unavailable");
+  const result = await response.json() as { success?: boolean; hostname?: string; action?: string };
+  return result.success === true && result.hostname === new URL(request.url).hostname && result.action === action;
+}
+async function passwordAttemptAllowed(store: ApiStore, email: string): Promise<boolean> {
+  // Best-effort account throttle, not a distributed atomic counter. A verified,
+  // single-use Turnstile token is required independently on every attempt.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email));
+  const key = `auth/attempts/${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("")}.json`;
+  const now = Date.now();
+  const previous = await store.get(key, { type: "json" }) as { count?: number; expires_at?: number } | null;
+  const active = previous && typeof previous.expires_at === "number" && previous.expires_at > now;
+  const count = active ? previous.count : 0;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) throw new Error("Invalid throttle state");
+  if (count >= 10) return false;
+  await store.setJSON(key, { count: count + 1, expires_at: active ? previous.expires_at : now + 900000 });
+  return true;
+}
+
 async function authResponse(request: Request, context: Context): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/(?:api|\.netlify\/functions\/api)/, "") || "/";
@@ -3242,7 +3276,9 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     return privateJson({ data: {
       googleEnabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       appleEnabled: Boolean(env.APPLE_CLIENT_ID && env.APPLE_CLIENT_SECRET),
-      signupEnabled: true,
+      signupEnabled: passwordAuthReady() && env.ORIVANE_PASSWORD_SIGNUP_ENABLED === "true",
+      passwordEnabled: passwordAuthReady(),
+      turnstileSiteKey: passwordAuthReady() ? env.ORIVANE_TURNSTILE_SITE_KEY : null,
     } });
   }
   if (request.method === "GET" && path === "/auth/me") {
@@ -3407,6 +3443,7 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     return new Response(JSON.stringify({ data: true }), { status: 200, headers: { ...PRIVATE_HEADERS, "set-cookie": authCookie("", 0) } });
   }
   if (request.method === "POST" && path === "/auth/logout") {
+    if (!sameOriginMutation(request)) return authFailure("request_rejected", 403);
     const expectedUserId = request.headers.get("x-orivane-user-id");
     if (expectedUserId !== null) {
       const user = await currentUser(request, context);
@@ -3415,52 +3452,49 @@ async function authResponse(request: Request, context: Context): Promise<Respons
       }
     }
     const token = authToken(request);
-    if (token) await authStore(context).delete(authSessionKey(token)).catch(() => undefined);
+    if (token) await authStore(context).delete(authSessionKey(token));
     return new Response(JSON.stringify({ data: true }), { status: 200, headers: { ...PRIVATE_HEADERS, "set-cookie": authCookie("", 0) } });
   }
+  if (path !== "/auth/signup" && path !== "/auth/login") return privateJson({ error: { code: "not_found", message: "Not found." } }, 404);
   if (request.method !== "POST") return privateJson({ error: { code: "method_not_allowed", message: "Method not allowed." } }, 405);
-  const body = await parseBody(request);
+  if (!passwordAuthReady()) return authFailure("auth_unavailable", 503);
+  if (path === "/auth/signup" && env.ORIVANE_PASSWORD_SIGNUP_ENABLED !== "true") return authFailure("signup_disabled", 403);
+  if (!sameOriginMutation(request)) return authFailure("request_rejected", 403);
+  let body: Record<string, unknown>;
+  try { body = await passwordRequestBody(request); } catch { return authFailure("validation_error", 422); }
   const email = normalizeEmail(body.email);
-  const password = String(body.password || "");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) {
-    return privateJson({ error: { code: "validation_error", message: "Email or password is invalid." } }, 422);
-  }
+  const password = typeof body.password === "string" ? body.password : "";
+  if (typeof body.email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    || !password || new TextEncoder().encode(password).length > 4096) return authFailure("validation_error", 422);
+  if (path === "/auth/signup" && [...password].length < 15) return authFailure("validation_error", 422);
+  // Challenge must pass BEFORE looking up account existence or executing a KDF.
+  if (!await passwordChallenge(request, body.challengeToken, path === "/auth/signup" ? "signup" : "login")) return authFailure("challenge_failed", 403);
   const store = authStore(context);
+  if (!await passwordAttemptAllowed(store, email)) return authFailure("too_many_attempts", 429);
   const key = authUserKey(email);
   const existing = await store.get(key, { type: "json" }) as AuthRecord | null;
   if (path === "/auth/signup") {
-    if (existing) return privateJson({ error: { code: "account_exists", message: "Account already exists." } }, 409);
-    const salt = randomSalt();
+    if (existing || isAdminEmail(email)) { dummyPasswordWork(password); return authFailure("signup_failed", 400); }
+    const credential = createPasswordCredential(password);
+    // Recheck after the expensive KDF; KV has no global compare-and-set guarantee.
+    if (await store.get(key, { type: "json" })) return authFailure("signup_failed", 400);
     const now = new Date().toISOString();
     const record: AuthRecord = {
-      id: crypto.randomUUID(),
-      email,
-      name: String(body.name || "").trim() || email.split("@")[0],
-      pictureUrl: null,
-      confirmedAt: now,
-      salt,
-      password_hash: await passwordHash(password, salt),
-      created_at: now,
+      id: crypto.randomUUID(), email,
+      name: typeof body.name === "string" ? body.name.trim().slice(0, 100) || email.split("@")[0] : email.split("@")[0],
+      pictureUrl: null, confirmedAt: undefined, salt: "", password_hash: "",
+      password_credential: credential, created_at: now, provider: "email",
     };
     await store.setJSON(key, record);
     return authSessionResponse(await createAuthSession(record, context));
   }
-  if (path === "/auth/login") {
-    if (!existing) {
-      return privateJson({ error: { code: "invalid_login", message: "Email or password is incorrect." } }, 401);
-    }
-    const verification = await verifyPassword(password, existing);
-    if (!verification.valid) return privateJson({ error: { code: "invalid_login", message: "Email or password is incorrect." } }, 401);
-    if (verification.needs_upgrade) {
-      const salt = randomSalt();
-      existing.salt = salt;
-      existing.password_hash = await passwordHash(password, salt);
-      existing.updated_at = new Date().toISOString();
-      await store.setJSON(key, existing);
-    }
-    return authSessionResponse(await createAuthSession(existing, context));
+  const verification = await verifyPassword(password, existing);
+  if (!verification.valid || !existing || typeof existing.id !== "string" || !existing.id || existing.email !== email) return authFailure("invalid_login", 401);
+  if (verification.needs_upgrade) {
+    const upgraded = { ...existing, password_credential: createPasswordCredential(password, verification.upgrade_iterations), salt: "", password_hash: "", updated_at: new Date().toISOString() };
+    await store.setJSON(key, upgraded);
   }
-  return privateJson({ error: { code: "not_found", message: "Not found." } }, 404);
+  return authSessionResponse(await createAuthSession(existing, context));
 }
 
 async function userState(request: Request, context: Context): Promise<Response> {
@@ -5649,7 +5683,10 @@ async function route(request: Request, context: Context): Promise<Response> {
     return privateJson({ data: await metricsSummary() });
   }
   if (path === "/events") return recordProductEvent(request, context);
-  if (path.startsWith("/auth/")) return authResponse(request, context);
+  if (path.startsWith("/auth/")) {
+    try { return await authResponse(request, context); }
+    catch { return authFailure("auth_unavailable", 503); }
+  }
   if (request.method === "GET" && path === "/assets/logo") return logoResponse(url.searchParams.get("symbol"));
   if (request.method === "GET" && path === "/assets/search") {
     const query = url.searchParams.get("q")?.trim();

@@ -14,10 +14,12 @@ type AuthContextValue = {
   googleEnabled: boolean;
   appleEnabled: boolean;
   signupEnabled: boolean;
+  passwordEnabled: boolean;
+  turnstileSiteKey: string | null;
   callbackMessage: "confirmed" | "oauth" | "";
   clearCallbackMessage: () => void;
-  loginWithEmail: (email: string, password: string) => Promise<AuthUser>;
-  signupWithEmail: (email: string, password: string, name: string) => Promise<AuthUser>;
+  loginWithEmail: (email: string, password: string, challengeToken?: string) => Promise<AuthUser>;
+  signupWithEmail: (email: string, password: string, name: string, challengeToken?: string) => Promise<AuthUser>;
   loginWithGoogle: () => void;
   loginWithApple: () => void;
   deleteAccount: () => Promise<void>;
@@ -31,7 +33,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const [appleEnabled, setAppleEnabled] = useState(false);
-  const [signupEnabled, setSignupEnabled] = useState(true);
+  const [signupEnabled, setSignupEnabled] = useState(false);
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
   const [callbackMessage, setCallbackMessage] = useState<"confirmed" | "oauth" | "">("");
 
   const epoch = useRef(0);
@@ -50,7 +54,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!active) return;
       setGoogleEnabled(config.googleEnabled);
       setAppleEnabled(config.appleEnabled);
-      setSignupEnabled(config.signupEnabled);
+      setSignupEnabled(config.signupEnabled === true);
+      setPasswordEnabled(config.passwordEnabled === true);
+      setTurnstileSiteKey(config.turnstileSiteKey || null);
     }).catch(() => undefined);
 
     const verifySession = async () => {
@@ -109,10 +115,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return currentEpoch;
   }, []);
 
-  const loginWithEmail = useCallback(async (email: string, password: string) => {
+  const loginWithEmail = useCallback(async (email: string, password: string, challengeToken?: string) => {
     const currentEpoch = beginMutation();
     try {
-      const session = await loginWithEmailApi(email, password);
+      const session = await loginWithEmailApi(email, password, challengeToken);
       if (mounted.current && currentEpoch === epoch.current) {
         storeAuthSession(session);
         setUser(session.user);
@@ -125,10 +131,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [beginMutation]);
 
-  const signupWithEmail = useCallback(async (email: string, password: string, name: string) => {
+  const signupWithEmail = useCallback(async (email: string, password: string, name: string, challengeToken?: string) => {
     const currentEpoch = beginMutation();
     try {
-      const session = await signupWithEmailApi(email, password, name);
+      const session = await signupWithEmailApi(email, password, name, challengeToken);
       if (mounted.current && currentEpoch === epoch.current) {
         storeAuthSession(session);
         setUser(session.user);
@@ -145,12 +151,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userId = user?.id;
     const currentEpoch = beginMutation();
     try {
-      await fetch("/api/auth/logout", {
+      const response = await fetch("/api/auth/logout", {
         method: "POST", credentials: "include",
         headers: userId ? { "x-orivane-user-id": userId } : {},
-      }).catch(() => undefined);
-    } finally {
+      });
+      if (!response.ok) throw new Error("Logout could not be confirmed. Please retry.");
       clearAuthSession();
+    } catch (error) {
+      if (mounted.current && currentEpoch === epoch.current) setUser(user);
+      throw error;
+    } finally {
       mutationRunning.current = false;
       if (mounted.current && currentEpoch === epoch.current) setLoading(false);
     }
@@ -187,6 +197,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     googleEnabled,
     appleEnabled,
     signupEnabled,
+    passwordEnabled,
+    turnstileSiteKey,
     callbackMessage,
     clearCallbackMessage: () => setCallbackMessage(""),
     loginWithEmail,
@@ -195,7 +207,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loginWithApple,
     deleteAccount,
     signOut,
-  }), [appleEnabled, callbackMessage, deleteAccount, googleEnabled, loading, loginWithApple, loginWithEmail, loginWithGoogle, signOut, signupEnabled, signupWithEmail, user]);
+  }), [passwordEnabled, turnstileSiteKey, appleEnabled, callbackMessage, deleteAccount, googleEnabled, loading, loginWithApple, loginWithEmail, loginWithGoogle, signOut, signupEnabled, signupWithEmail, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

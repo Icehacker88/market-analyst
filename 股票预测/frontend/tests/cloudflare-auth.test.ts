@@ -71,6 +71,7 @@ type RequestOptions = { method?: string; token?: string; headers?: HeadersInit; 
 
 async function request(env: WorkerEnv, path: string, options: RequestOptions = {}) {
   const headers = new Headers(options.headers);
+  if (!headers.has("origin")) headers.set("origin", "https://app.example.test");
   if (options.token) headers.set("cookie", `orivane_session=${encodeURIComponent(options.token)}`);
   if (options.body !== undefined) headers.set("content-type", "application/json");
   const background: Promise<unknown>[] = [];
@@ -138,7 +139,9 @@ afterEach(() => {
 describe("generated Cloudflare API session authentication", () => {
   it("keeps email signup, login and their existing cookie-session structure working", async () => {
     const { env, users } = fixture();
-    const credentials = { email: "new@example.test", password: "test-password-only", name: "New user" };
+    Object.assign(env, { ORIVANE_PASSWORD_AUTH_ENABLED: "true", ORIVANE_PASSWORD_SIGNUP_ENABLED: "true", ORIVANE_TURNSTILE_SITE_KEY: "local-test-key", ORIVANE_TURNSTILE_SECRET_KEY: "local-test-secret" });
+    vi.mocked(fetch).mockImplementation(async (_url, init) => Response.json({ success: true, hostname: "app.example.test", action: JSON.parse(String(init?.body)).response }));
+    const credentials = { email: "new@example.test", password: "test-password-only", name: "New user", challengeToken: "signup" };
     const signup = await request(env, "/auth/signup", { method: "POST", body: credentials });
     expect(signup.status).toBe(200);
     const created = await signup.json() as { data: { user: { id: string; email: string } } };
@@ -148,11 +151,11 @@ describe("generated Cloudflare API session authentication", () => {
     const signupToken = decodeURIComponent(cookieHeader.match(/orivane_session=([^;]+)/)![1]);
     expect(users.json(sessionKey(signupToken))).toMatchObject({ token: signupToken, user_id: created.data.user.id, email: credentials.email });
     expect(await (await request(env, "/auth/me", { token: signupToken })).json()).toMatchObject({ data: created.data.user });
-    const login = await request(env, "/auth/login", { method: "POST", body: credentials });
+    const login = await request(env, "/auth/login", { method: "POST", body: { ...credentials, challengeToken: "login" } });
     expect(login.status).toBe(200);
     expect(await login.json()).toMatchObject({ data: { user: { id: created.data.user.id } } });
-    expect((await request(env, "/auth/login", { method: "POST", body: { ...credentials, password: "wrong-password" } })).status).toBe(401);
-    expect(fetch).not.toHaveBeenCalled();
+    expect((await request(env, "/auth/login", { method: "POST", body: { ...credentials, password: "wrong-password", challengeToken: "login" } })).status).toBe(401);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it.each(protectedRoutes)("rejects forged JWT claims on $method $path", async ({ path, status, ...options }) => {
