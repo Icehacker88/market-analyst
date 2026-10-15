@@ -2,6 +2,12 @@
 
 Updated: 2026-10-15 (Asia/Kuala_Lumpur)
 
+## Hosting confirmation
+
+On 2026-10-15 the user explicitly confirmed **Cloudflare Pages** as the current hosting platform. Netlify configuration is retained legacy configuration; `netlify/functions/api.mts` remains an active maintenance source for the generated Cloudflare API. No hosting migration is needed. This update corrects the earlier description of a separate Netlify/Python hosting path. Current deployment SHA, environment bindings, and authentication acceptance remain unverified live.
+
+The documentation branch was also inspected: its baseline `wrangler.toml` has no `env.preview` section, and `preview:cloudflare` does not select an isolated environment. Do not assume that the historical local Preview isolation configuration is present on GitHub.
+
 ## Remote GitHub baseline (verified)
 
 - Repository: [`Icehacker88/market-analyst`](https://github.com/Icehacker88/market-analyst), public, default branch `main`.
@@ -15,7 +21,7 @@ Updated: 2026-10-15 (Asia/Kuala_Lumpur)
 - Root `股票预测/README.md` documents the Python forecasting/report tool and the Orivane web app, currently naming Cloudflare Pages URL `https://orivane-market-intelligence.pages.dev/`.
 - `.github/workflows/daily-market-report.yml` runs on Malaysia-morning schedule retries, gates on a new U.S. session, deduplicates with a successful report artifact, runs Python unit tests, sends the report email, persists the prediction ledger to the workflow branch, and uploads `daily-market-report`.
 - `.github/workflows/kronos-daily.yml` runs a weekday official Kronos forecast with GitHub OIDC and uploads an artifact.
-- Root `netlify.toml` configures a build from `股票预测/frontend`; configuration alone does not confirm the active production host.
+- Root `netlify.toml` retains legacy build settings for `股票预测/frontend`; the user has confirmed that the active host is Cloudflare Pages.
 - No root `AGENTS.md`, `CLAUDE.md`, or `docs/` status/architecture/task handoff was present on the inspected remote `main` snapshot.
 
 ## Latest project progress that can be supported
