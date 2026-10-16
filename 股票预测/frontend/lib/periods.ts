@@ -1,6 +1,9 @@
-import type { HistoryRecord } from "./types";
+import type { History, HistoryRecord, PeriodReturns } from "./types";
 import type { MessageKey } from "./i18n";
 import { validatedPriceRecords } from "./history-series";
+import { startForRange } from "./selection";
+
+export const RECENT_RETURN_RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y"] as const;
 
 export const RANGE_OPTIONS: { range: string; label: MessageKey }[] = [
   { range: "1D", label: "period1d" },
@@ -29,6 +32,22 @@ export function periodReturn(records: HistoryRecord[], range: string, now = new 
   }
 
   return baseline?.Price ? latest.Price / baseline.Price - 1 : null;
+}
+
+export function periodReturnsFromHistory(history: History, ranges: readonly string[], longTermComplete = false): PeriodReturns {
+  const now = new Date(`${history.data_as_of}T12:00:00Z`);
+  return {
+    symbol: history.symbol,
+    data_as_of: history.data_as_of,
+    returns: Object.fromEntries(ranges.map((item) => [item, periodReturn(history.records, item, now)])),
+    long_term_complete: longTermComplete,
+  };
+}
+
+// Recent ranges a daily history requested from `loadStart` fully covers. A shorter
+// window would otherwise fall back to its first point and mislabel 6M or 1Y returns.
+export function recentRangesWithin(loadStart: string, now = new Date()): string[] {
+  return RECENT_RETURN_RANGES.filter((range) => startForRange(range, now) >= loadStart);
 }
 
 function rangeStart(range: string, now: Date): string {

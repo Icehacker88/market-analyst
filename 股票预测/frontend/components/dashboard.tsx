@@ -9,8 +9,8 @@ import { trackEvent } from "@/lib/analytics";
 import { canonicalizeAsset } from "@/lib/assets";
 import { comparisonColor } from "@/lib/comparison-colors";
 import { dashboardDestination, parseDashboardViewState, rememberRecentSymbol, replaceDashboardLocation, saveComparisonDraft, type DashboardViewState, type DetailTab } from "@/lib/dashboard-state";
-import { compareSeriesFromHistory, FULL_HISTORY_START, isLongHistoryRange, sliceCompareSeries } from "@/lib/history-series";
-import { periodReturn } from "@/lib/periods";
+import { compareSeriesFromHistory, FULL_HISTORY_START, isLongHistoryRange, LONG_HISTORY_RANGES, sliceCompareSeries } from "@/lib/history-series";
+import { periodReturnsFromHistory, RECENT_RETURN_RANGES, recentRangesWithin } from "@/lib/periods";
 import { scheduleBackgroundTask } from "@/lib/network";
 import { addSymbol, parseSymbols, removeSymbol, startForRange } from "@/lib/selection";
 import type { Asset, CompanyResearch, CompareSeries, Forecast, History, Performance, PeriodReturns, PredictionHistory } from "@/lib/types";
@@ -43,20 +43,6 @@ type AssetBundle = {
   performanceLoading?: boolean;
   predictionsLoading?: boolean;
 };
-
-const RECENT_RETURN_RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y"] as const;
-const FULL_RETURN_RANGES = [...RECENT_RETURN_RANGES, "5Y", "10Y", "MAX"] as const;
-
-function periodReturnsFromHistory(history: History, longTermComplete = false): PeriodReturns {
-  const now = new Date(`${history.data_as_of}T12:00:00Z`);
-  const ranges = longTermComplete ? FULL_RETURN_RANGES : RECENT_RETURN_RANGES;
-  return {
-    symbol: history.symbol,
-    data_as_of: history.data_as_of,
-    returns: Object.fromEntries(ranges.map((item) => [item, periodReturn(history.records, item, now)])),
-    long_term_complete: longTermComplete,
-  };
-}
 
 function mergePeriodReturns(previous: PeriodReturns | undefined, incoming: PeriodReturns): PeriodReturns {
   if (!previous) return incoming;
@@ -96,6 +82,7 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
   const pendingForecasts = useRef(new Set<string>());
   const loadedForecasts = useRef(new Set<string>());
   const pendingReturns = useRef(new Set<string>());
+  const loadedRecentReturns = useRef(new Set<string>());
   const loadedFullReturns = useRef(new Set<string>());
   const pendingFullHistories = useRef(new Set<string>());
   const loadedFullHistories = useRef(new Set<string>());
@@ -184,7 +171,7 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
         setSeries([item]);
         setCompareErrors([]);
         setPeriodReturns((current) => {
-          const recent = periodReturnsFromHistory(history);
+          const recent = periodReturnsFromHistory(history, recentRangesWithin(loadStart));
           return { ...current, [asset.symbol]: mergePeriodReturns(current[asset.symbol], recent) };
         });
         setBundles((current) => ({
@@ -223,7 +210,7 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
             data_as_of: item.data_as_of,
             snapshot: item.snapshot || {},
             records: item.points.map((point) => ({ Date: point.date, Price: point.price })),
-          });
+          }, recentRangesWithin(loadStart));
           next[item.symbol] = mergePeriodReturns(current[item.symbol], recent);
         });
         return next;
@@ -321,11 +308,12 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
   const loadReturns = useCallback(async (symbol: string, scope: "recent" | "full") => {
     const key = `${symbol}:${scope}`;
     if (pendingReturns.current.has(key)) return;
-    if (scope === "recent" && periodReturns[symbol]) return;
+    if (scope === "recent" && (loadedRecentReturns.current.has(symbol) || RECENT_RETURN_RANGES.every((range) => periodReturns[symbol]?.returns && range in periodReturns[symbol].returns))) return;
     if (scope === "full" && periodReturns[symbol]?.long_term_complete) return;
     pendingReturns.current.add(key);
     try {
       const data = await getPeriodReturns(symbol, scope);
+      if (scope === "recent") loadedRecentReturns.current.add(symbol);
       setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], data) }));
     } catch {
       // The chart and forecast remain usable when long-range returns are unavailable.
@@ -370,7 +358,9 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
             loadedFullReturns.current.add(symbol);
             setFullSeries((current) => ({ ...current, [symbol]: compareSeriesFromHistory(snapshot.history!) }));
             setFullHistoryErrors((current) => { const next = { ...current }; delete next[symbol]; return next; });
-            const completeReturns = periodReturnsFromHistory(snapshot.history, true);
+            // Full-history requests can come back as monthly bars, so only long ranges
+            // come from them; short ranges stay on daily data, as in /api/market/returns.
+            const completeReturns = periodReturnsFromHistory(snapshot.history, LONG_HISTORY_RANGES, true);
             setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], completeReturns) }));
           });
           pending.filter((asset) => !returned.has(asset.symbol)).forEach((asset) => {
