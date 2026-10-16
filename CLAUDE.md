@@ -1,15 +1,38 @@
 # Claude Code entry point
 
-Read the repository-root `AGENTS.md` first; it is the shared, authoritative policy for Claude Code and Codex. Then read `docs/ARCHITECTURE.md`, `docs/PROJECT_STATUS.md`, `docs/TASKS.md`, the relevant project README, and any nested instructions for files you will edit.
+The repository-root `AGENTS.md` is the shared, authoritative policy for Claude Code and Codex. It is imported below so Claude Code loads it automatically. This file only adds Claude Code mechanics; if anything here seems to conflict with `AGENTS.md`, `AGENTS.md` wins and the conflict should be fixed in a PR.
 
-Work only on the task assigned to you, in the named isolated branch/worktree. Confirm its base SHA and inspect all working-tree changes before editing. Do not assume Codex shares this chat history; use the task board, commits, PR description, and handoff note. Do not edit files owned by another active task. Record changed paths, checks actually run, risks, and the next action before handing work back.
+@AGENTS.md
 
-Submit a focused PR to `main` for review. Do not merge your own PR. Production/Preview deployment, production configuration or data changes, scheduled jobs, email delivery, and other live side effects require explicit user authorization for that action. Preserve existing GitHub Actions contracts and the Python/Orivane hosting boundaries described in `AGENTS.md`.
+## Start of every session
+
+1. Read `docs/PROJECT_STATUS.md` and `docs/TASKS.md` from the freshly fetched branch you will work from (until the docs PR is merged, that may be a docs branch; `PROJECT_STATUS.md` names the current bases).
+2. `git fetch origin`, then confirm the `origin/main` SHA, open PRs, the existing worktrees (`git worktree list`), and which tasks Codex currently owns. Do not edit paths owned by an `in_progress` Codex task.
+3. Claude Code loads `CLAUDE.md` files but not `AGENTS.md` files on its own. Before editing under a directory, read any nested `AGENTS.md` there (for example `股票预测/frontend/AGENTS.md` on the product branches); its freeze and deployment rules apply to you.
+4. Do not assume Codex shares this chat history. Everything Codex needs must be in a commit, PR, or the docs.
+
+## Worktrees on this machine
+
+- The original checkout at `~/Documents/Market Analysis` holds uncommitted changes that are not yours. Never edit, stash, reset, clean, build, or commit there. Use it only for read-only `git` commands.
+- Create each task worktree from a fresh remote base: `git worktree add -b claude/<scope>-YYYYMMDD ~/.claude/worktrees/market-analyst-<scope> <base>`. Codex's worktrees live under `~/.codex/worktrees/`; do not touch them.
+- For reviewing or verifying another branch, use a detached worktree (`git worktree add --detach ...`) and remove it when done.
+
+## GitHub access
+
+- Check `gh auth status` at the start of a session. If the GitHub CLI is unavailable, push the branch with `git` and give the user the compare link (`https://github.com/Icehacker88/market-analyst/compare/<base>...<branch>`) to open the PR. Record the PR number in `docs/TASKS.md` once it exists.
+- Post reviews as PR comments when you can write to GitHub; otherwise hand the review text to the user, as `AGENTS.md` describes.
+
+## Reviewing a Codex PR
+
+1. Check out the PR head in a detached worktree; diff it against the PR base, not against your local `main`.
+2. Read every changed file in full context. Check callers before accepting a changed public interface. API changes belong in `netlify/functions/api.mts`; the generated `functions/api/[[path]].ts` is gitignored and rebuilt by the generator.
+3. Run the checks for the changed paths (frontend: `npm ci`, `node scripts/generate-cloudflare-worker.mjs`, `npm run typecheck`, `npm test`; Python: `python -m unittest discover -s tests -q` in `股票预测`). Report only commands you actually ran.
+4. Give a verdict with findings ordered by severity, each with file, line, and a concrete failure scenario. Propose fixes; do not push to Codex's branch unless the task board assigns it to you.
 
 ## Cloudflare handoff
 
-The user confirmed on 2026-10-15 that the current host is **Cloudflare Pages**. Read `股票预测/frontend/wrangler.toml`, `package.json`, and `scripts/generate-cloudflare-worker.mjs` for this branch's build/runtime configuration. The API maintenance source is still `netlify/functions/api.mts`; the generator writes `functions/api/[[path]].ts`. Keep this source/generator relationship intact. Netlify configuration files are retained legacy files, not deployment instructions for the current host.
+The user confirmed on 2026-10-15 that the current host is **Cloudflare Pages**. Read `股票预测/frontend/wrangler.toml`, `package.json`, and `scripts/generate-cloudflare-worker.mjs` for the branch's build/runtime configuration. The API maintenance source is still `netlify/functions/api.mts`; the generator writes `functions/api/[[path]].ts`. Keep this source/generator relationship intact. Netlify configuration files are retained legacy files, not deployment instructions for the current host.
 
-The documentation is currently on `codex/agent-collaboration-docs-20261015`, not merged into `main`. Fetch this branch to read the handoff before starting; create your own task branch/worktree from the explicitly agreed base. Record that base SHA and any prerequisite branch in `docs/TASKS.md`. As of 2026-10-16 the accepted UI branch (`codex/ui-preview-ff7fd40d`, aee719e) and local-only auth branch (`codex/authentication-round1`, 75289a7) are synchronized to GitHub. They are not merged into main. Use `docs/PROJECT_STATUS.md` to choose the exact base; the dirty original checkout and frozen old auth branch remain excluded.
+Inspect Preview bindings before using local Wrangler or remote deployment, because the `main` baseline has no isolated `env.preview` configuration. Do not copy Production KV or credentials into Preview. A user-confirmed hosting provider is not evidence of a particular live deployment SHA or successful authentication acceptance.
 
-Inspect Preview bindings before using local Wrangler or remote deployment: the inspected remote baseline has no isolated `env.preview` configuration. Do not copy Production KV or credentials into Preview. Review metadata through Cloudflare; a user-confirmed hosting provider is not evidence of a particular live deployment SHA or successful authentication acceptance.
+Which branch to build product work on (accepted UI branch, local-only auth branch, or `main`) changes over time and is recorded in `docs/PROJECT_STATUS.md`. Record your chosen base SHA and any prerequisite branch in `docs/TASKS.md`. Never base work on the dirty original checkout or the frozen `codex/auth-admin-frozen-20260930` branch.

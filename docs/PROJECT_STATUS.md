@@ -44,6 +44,24 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 2026-10-15 上线审计发现 optimizer 35 个资产全部失败（503 与超时），同日 Kronos 上传 67 个结果；二者不同存储/生产路径，不能互相当作完整覆盖证明。这是昨日证据，本次没有触发生产任务或复测性能。
 - UI/认证分支含 Preview 隔离配置；文档分支旧源码没有同等配置。任何未来部署均须按所用源码分支重新核对六个 KV、凭据和 `ORIVANE_SKIP_SEO_REFRESH=1`。
 
+## 双 Agent 协作机制现状
+
+更新：2026-10-16，Claude Code 核对。规则见 `AGENTS.md`（共享）和 `CLAUDE.md`（Claude Code 入口，通过 `@AGENTS.md` 导入同一规则）。
+
+| 环节 | 现状 | 触发方式 |
+| --- | --- | --- |
+| 共享规则、任务看板、交接记录 | `AGENTS.md`、`CLAUDE.md`、`docs/TASKS.md`、本文件（PR #1 及其后续 PR，未合并） | 人工：每个 Agent 开始/结束任务时读写 |
+| 需求拆分与分配 | 接收需求的 Agent 写入 `docs/TASKS.md` | 人工：用户向某个 Agent 提出需求 |
+| 独立开发 | 每个任务独立分支 + worktree（Codex：`~/.codex/worktrees/`；Claude Code：`~/.claude/worktrees/`） | 人工：用户打开对应 Agent 会话 |
+| PR 自动测试 | `.github/workflows/pr-checks.yml` 已提交为 PR，**尚未合并**：前端 typecheck + vitest，Python unittest + backend pytest；只读、无 secret、不部署 | 合并后自动：每个 PR |
+| PR 交接模板 | `.github/pull_request_template.md`，与上面同一 PR，尚未合并 | 合并后自动：新建 PR 时预填 |
+| 交叉 Code Review | 规则已写入 `AGENTS.md`；没有任何集成让一方自动审另一方 PR | 人工：用户让另一 Agent 审阅 PR 编号 |
+| 合并 main | 人工决定 | 人工 |
+| main 分支保护 | 未配置（未核验）。注意：Daily Market Report 直接向 main 推送预测账本，配置“必须走 PR”时需让 GitHub Actions 例外，否则会中断账本提交 | 用户在 GitHub 设置 |
+| 本机 GitHub CLI | 2026-10-16 本机没有 `gh`，Claude Code 只能 push 分支，PR 需用户点 compare 链接创建；Codex 集成此前创建 PR 返回 403 | 用户安装并登录 `gh` 后可由 Agent 创建 PR 和发表评审 |
+
+本地核验（2026-10-16，Claude Code）：`origin/main` 5534388 前端 27 文件 / 72 测试通过、typecheck 通过；`codex/authentication-round1` 75289a7 前端 54 文件 / 346 测试通过、typecheck 通过；两者 Python unittest 22 项、backend pytest 7 项通过（本机 Python 3.13，CI 使用 3.11）。
+
 ## 下一步
 
 1. 等待单独授权及用户完成 Paid 环境准备；核验有效 CPU 配额、隔离 Turnstile，再开展 Authentication Round 1 Preview 验收。
