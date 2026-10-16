@@ -1,49 +1,53 @@
-# Project status and handoff
+# Orivane 项目进度与协作交接
 
-Updated: 2026-10-15 (Asia/Kuala_Lumpur)
+更新：2026-10-16（Asia/Kuala_Lumpur）。本次同步代码分支与进度文档，不合并 main，不部署。
 
-## Hosting confirmation
+## 当前应使用的版本
 
-On 2026-10-15 the user explicitly confirmed **Cloudflare Pages** as the current hosting platform. Netlify configuration is retained legacy configuration; `netlify/functions/api.mts` remains an active maintenance source for the generated Cloudflare API. No hosting migration is needed. This update corrects the earlier description of a separate Netlify/Python hosting path. Current deployment SHA, environment bindings, and authentication acceptance remain unverified live.
+| 用途 | GitHub 分支 / 提交 | 验证与发布状态 |
+| --- | --- | --- |
+| 稳定产品与后续 UI 基线 | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `aee719e6aec0ededdd7000d34807c8250708994e` | 首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；这些阶段冻结 |
+| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1) · `75289a744e6533f0c3da3dd007a1656b5fc03dc1` | 基于上述产品提交，仅本地完成；346 项测试、typecheck、Cloudflare build、Pages 打包通过。未部署认证版本 |
+| 协作文档 | `codex/agent-collaboration-docs-20261015` · [PR #1](https://github.com/Icehacker88/market-analyst/pull/1) | 文档更新待审阅；此分支本身不包含最新产品源码 |
+| main | 本次读取为 `553438897d501a33c7e120009bffd36463c7962e` | 自动任务仍在写入预测账本；不等同于最新 Orivane 产品版本。本轮不覆盖或合并 |
 
-The documentation branch was also inspected: its baseline `wrangler.toml` has no `env.preview` section, and `preview:cloudflare` does not select an isolated environment. Do not assume that the historical local Preview isolation configuration is present on GitHub.
+以上 UI 与认证分支于本轮推送至 GitHub，保留原提交 SHA 和隔离边界。同步前两工作树均干净。不得从旧 main 工作区构建最新产品；不得合并或 cherry-pick `codex/auth-admin-frozen-20260930`。
 
-## Remote GitHub baseline (verified)
+## 已完成产品阶段
 
-- Repository: [`Icehacker88/market-analyst`](https://github.com/Icehacker88/market-analyst), public, default branch `main`.
-- At inspection, remote `main` was `f28da7709353adbc716932af119ddd210dc1b400`, committed 2026-10-15 01:29 UTC, subject `Update prediction ledger`.
-- The available local checkout was at `f82c6bec1596e1c4b0da66b48c212eed2036d10c` and 30 commits behind `origin/main`; it contained 38 modified/untracked paths. It was not used as the source for this branch. Do not reset, clean, switch, or include those changes as part of this documentation task.
-- The newest visible remote commits were repeated `Update prediction ledger` writes. Remote root contains `.github/`, `.netlifyignore`, `Makefile`, `netlify.toml`, and `股票预测/`.
-- At inspection, there were no open PRs. GitHub connector confirmed repository metadata. A remote branch-creation attempt through that connector returned 403 `Resource not accessible by integration`; this status describes that attempt only, not all possible Git credentials. The latest run (ID `38689307150`) completed successfully only because the same-day dedupe step skipped checkout, session check, tests, report generation, ledger write, email verification, and upload; its artifact list was empty. It is not a new report. The immediately preceding run (`38685545393`) was likewise deduped with no artifact.
+- 首页 Round 1 / Round 2 / Round 2.1：搜索、资产发现、移动布局、Service Worker 与 logo 修复；已冻结。
+- My Research：完整关注列表恢复、资产级待办、多原因归并、只读 Snapshot、完整性与时效维度；已冻结。已有托管样本中 50 只资产完成只读处理，不等于 50 只都有完整或新鲜研究数据。
+- Research Record：保存、编辑个人判断与不可变初始快照，支持无行情/预测。
+- Research Review：按稳定记录 ID 到期复核、独立复核历史、继续跟踪和归档。
+- Core User Journey Polish：隔离本机草稿、单资产分析页保存入口、复核反馈与历史定位、当前/初始判断区分、同步状态文案。
 
-## What the remote repository shows
+Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行的浏览器验收。详情及各阶段报告在 UI 分支的 [`股票预测/frontend/docs/`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d/%E8%82%A1%E7%A5%A8%E9%A2%84%E6%B5%8B/frontend/docs)。
 
-- Root `股票预测/README.md` documents the Python forecasting/report tool and the Orivane web app, currently naming Cloudflare Pages URL `https://orivane-market-intelligence.pages.dev/`.
-- `.github/workflows/daily-market-report.yml` runs on Malaysia-morning schedule retries, gates on a new U.S. session, deduplicates with a successful report artifact, runs Python unit tests, sends the report email, persists the prediction ledger to the workflow branch, and uploads `daily-market-report`.
-- `.github/workflows/kronos-daily.yml` runs a weekday official Kronos forecast with GitHub OIDC and uploads an artifact.
-- Root `netlify.toml` retains legacy build settings for `股票预测/frontend`; the user has confirmed that the active host is Cloudflare Pages.
-- No root `AGENTS.md`, `CLAUDE.md`, or `docs/` status/architecture/task handoff was present on the inspected remote `main` snapshot.
+## Authentication Round 1
 
-## Latest project progress that can be supported
+用户已决定未来采用 Workers Paid，保留现有账号 UUID、KV session 和用户状态。本轮没有升级套餐。
 
-1. **Remote progress through 2026-10-15:** confirmed prediction-ledger updates landed on `main`, with latest commit `f28da77`. The latest two scheduled runs were dedupe-only successes with no artifact, so they do not confirm a new market report or forecast artifact for this session.
-2. **Local historical project record through 2026-10-01:** a user workspace report and isolated UI worktree document a substantial Orivane research experience and local UI work through commit `aee719e`. Those files are outside the remote `main` lineage inspected here. They are evidence of a local branch/worktree, not proof that these changes are pushed, merged, deployed, or accepted.
-3. **Local dirty work through 2026-10-15:** the original checkout has 21 modified frontend files and 17 untracked paths (38 total), including account-isolation/security tests, new home components, private storage, and deployment/runtime edits. Their current intent, test status, PR status, compatibility with the latest `main`, and deployment status have not been verified as part of this docs-only synchronization. Preserve and inspect these changes in a separate assigned task before integration.
-4. **Security boundary from the local historical report:** as of its 2026-09-30 evidence, the Preview password flow was blocked by the Workers Free CPU limit and additional auth-hardening work was deferred; that historic finding is not a live recheck. Reverify before any authentication or release work.
+- `@noble/hashes@2.4.0` PBKDF2-SHA256，600000 次，显式 scheme/version/参数。
+- 旧 salted SHA-256 和 PBKDF2 按原参数验证；正确验证后才升级，高迭代参数不降低。无批量迁移。
+- 默认关闭密码入口与注册开关；加入服务端 Turnstile、尝试次数限制、错误脱敏及退出失败提示。
+- 本地 Miniflare/workerd 基准：约 540–615ms/次；V8 CPU 采样约 566ms/次。不是托管 CPU，也不是 Workers Paid 验收。
+- 公开注册仍有邮箱归属验证、账号恢复、KV 无法保证全局原子邮箱唯一性等后续门槛；KV 计数不宣称为全局原子限流。
 
-## Release and verification truth
+[认证交付、测试、兼容性及回退说明](https://github.com/Icehacker88/market-analyst/blob/codex/authentication-round1/%E8%82%A1%E7%A5%A8%E9%A2%84%E6%B5%8B/frontend/docs/authentication-round1-2026-10-15.md)。上述测试运行于 2026-10-15，本次仅核验提交与同步，没有重跑或重新宣称线上通过。
 
-The latest two Actions runs and their jobs/artifact lists were checked; neither produced an artifact. The latest Preview deployment, Production deployment, live environment bindings, and current auth flow were not validated for this status update. Treat all local report dates as historical. Before a feature, security, or release task:
+## 发布和数据生产边界
 
-1. Fetch current `main`, check open PRs, and inspect recent commits/Actions runs.
-2. Identify exact source branch and deployment target; compare deploy commit with intended commit.
-3. Run checks relevant to changed paths and record actual results.
-4. For Preview, explicitly verify the isolated target/bindings and obtain the user's deployment authorization.
-5. For Production, require explicit user authorization and a human-reviewed PR; confirm rollback path and post-deploy health.
+- 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
+- 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
+- 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
+- Production 的上次核验记录仍是旧版本且包含 dirty 部署标记；本次不重新认定其版本、安全性或用户数据状态，不修改 Production。
+- 2026-10-15 上线审计发现 optimizer 35 个资产全部失败（503 与超时），同日 Kronos 上传 67 个结果；二者不同存储/生产路径，不能互相当作完整覆盖证明。这是昨日证据，本次没有触发生产任务或复测性能。
+- UI/认证分支含 Preview 隔离配置；文档分支旧源码没有同等配置。任何未来部署均须按所用源码分支重新核对六个 KV、凭据和 `ORIVANE_SKIP_SEO_REFRESH=1`。
 
-## Current handoff
+## 下一步
 
-- Owner: Codex (documentation synchronization).
-- Status: `review`; the branch was pushed, but PR creation is blocked because the connected GitHub integration returned 403 `Resource not accessible by integration`. No application code or workflow was changed.
-- Branch: `codex/agent-collaboration-docs-20261015`, based on `f28da7709353adbc716932af119ddd210dc1b400`.
-- Next action: open [the PR creation page](https://github.com/Icehacker88/market-analyst/pull/new/codex/agent-collaboration-docs-20261015), review the documentation-only diff and repository checks, then a human decides whether to merge. No PR currently exists.
+1. 等待单独授权及用户完成 Paid 环境准备；核验有效 CPU 配额、隔离 Turnstile，再开展 Authentication Round 1 Preview 验收。
+2. 后续单独处理公开注册/恢复与 OAuth 安全门槛；不得因本地测试通过就打开公开注册。
+3. 明确核心资产持续数据生产，再做 Production 发布与兼容回滚演练。
+
+只同步明确提交的成果。原 main 工作区的未提交内容、冻结旧认证分支、QA 输出、secret、真实账号和私人数据均不纳入本轮同步。合并与部署需另行授权。

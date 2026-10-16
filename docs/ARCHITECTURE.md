@@ -1,5 +1,7 @@
 # Repository architecture and operational boundaries
 
+2026-10-16 handoff: the architecture below describes the older main baseline. Latest product/auth code is now available on the separate branches linked in [PROJECT_STATUS.md](PROJECT_STATUS.md); their Preview configuration and newer research features are not merged into this documentation branch.
+
 Last reconciled: 2026-10-15. This document reflects the remote `main` snapshot `f28da7709353adbc716932af119ddd210dc1b400` and local read-only project materials dated through 2026-10-01. The user confirmed Cloudflare Pages as the current host on 2026-10-15. Verify live deployment revisions and Actions before any release decision.
 
 ## Repository areas
