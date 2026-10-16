@@ -10,7 +10,7 @@ import { canonicalizeAsset } from "@/lib/assets";
 import { comparisonColor } from "@/lib/comparison-colors";
 import { dashboardDestination, parseDashboardViewState, rememberRecentSymbol, replaceDashboardLocation, saveComparisonDraft, type DashboardViewState, type DetailTab } from "@/lib/dashboard-state";
 import { compareSeriesFromHistory, FULL_HISTORY_START, isLongHistoryRange, LONG_HISTORY_RANGES, sliceCompareSeries } from "@/lib/history-series";
-import { periodReturnsFromHistory, RECENT_RETURN_RANGES, recentRangesWithin } from "@/lib/periods";
+import { fillMissingPeriodReturns, periodReturnsFromHistory, RECENT_RETURN_RANGES, recentRangesWithin } from "@/lib/periods";
 import { scheduleBackgroundTask } from "@/lib/network";
 import { addSymbol, parseSymbols, removeSymbol, startForRange } from "@/lib/selection";
 import type { Asset, CompanyResearch, CompareSeries, Forecast, History, Performance, PeriodReturns, PredictionHistory } from "@/lib/types";
@@ -314,7 +314,7 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
     try {
       const data = await getPeriodReturns(symbol, scope);
       if (scope === "recent") loadedRecentReturns.current.add(symbol);
-      setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], data) }));
+      setPeriodReturns((current) => ({ ...current, [symbol]: fillMissingPeriodReturns(current[symbol], data) }));
     } catch {
       // The chart and forecast remain usable when long-range returns are unavailable.
     } finally {
@@ -329,7 +329,7 @@ export function Dashboard({ initialSymbols = [], enableResearchRecords = false }
     try {
       const data = await getPeriodReturns(symbol, "full");
       if (data.long_term_complete) loadedFullReturns.current.add(symbol);
-      setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], data) }));
+      setPeriodReturns((current) => ({ ...current, [symbol]: fillMissingPeriodReturns(current[symbol], data) }));
     } catch {
       // A previously cached full history can still be used on a later visit.
     } finally {

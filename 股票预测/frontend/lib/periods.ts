@@ -44,6 +44,17 @@ export function periodReturnsFromHistory(history: History, ranges: readonly stri
   };
 }
 
+// Adds only the ranges `previous` lacks. /api/market/returns is cached longer than the
+// history already on screen, so its result must not replace a value the page shows.
+export function fillMissingPeriodReturns(previous: PeriodReturns | undefined, incoming: PeriodReturns): PeriodReturns {
+  if (!previous) return incoming;
+  const returns = { ...previous.returns };
+  for (const [range, value] of Object.entries(incoming.returns)) {
+    if (returns[range] == null) returns[range] = value;
+  }
+  return { ...previous, returns, long_term_complete: Boolean(previous.long_term_complete || incoming.long_term_complete) };
+}
+
 // Recent ranges a daily history requested from `loadStart` fully covers. A shorter
 // window would otherwise fall back to its first point and mislabel 6M or 1Y returns.
 export function recentRangesWithin(loadStart: string, now = new Date()): string[] {

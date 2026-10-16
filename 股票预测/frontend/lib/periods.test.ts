@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LONG_HISTORY_RANGES } from "./history-series";
-import { periodReturn, periodReturnsFromHistory, recentRangesWithin } from "./periods";
+import { fillMissingPeriodReturns, periodReturn, periodReturnsFromHistory, recentRangesWithin } from "./periods";
 import { startForRange } from "./selection";
 import type { History, HistoryRecord } from "./types";
 
@@ -72,5 +72,18 @@ describe("period returns from loaded histories", () => {
   it("keeps year-to-date inside a one-month window early in January", () => {
     const now = new Date("2026-01-10T12:00:00Z");
     expect(recentRangesWithin(startForRange("1M", now), now)).toEqual(["1D", "5D", "1M", "YTD"]);
+  });
+});
+
+describe("filling missing period returns", () => {
+  it("adds absent or null ranges without replacing shown values", () => {
+    const shown = { symbol: "NVDA", data_as_of: "2026-10-16", returns: { "1D": 0.1, "6M": null } };
+    const cached = { symbol: "NVDA", data_as_of: "2026-10-15", long_term_complete: true, returns: { "1D": -0.02, "6M": 0.3, "5Y": 2 } };
+    expect(fillMissingPeriodReturns(shown, cached)).toEqual({
+      symbol: "NVDA",
+      data_as_of: "2026-10-16",
+      long_term_complete: true,
+      returns: { "1D": 0.1, "6M": 0.3, "5Y": 2 },
+    });
   });
 });
