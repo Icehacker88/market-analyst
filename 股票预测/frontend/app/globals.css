@@ -353,7 +353,6 @@ th, td { padding: 9px; border-bottom: 1px solid var(--border); white-space: nowr
 .asset-logo.small { width: 25px; height: 25px; }
 .asset-logo.large { width: 34px; height: 34px; }
 .asset-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-.asset-logo svg { width: 48%; height: 48%; }
 
 .auth-overlay { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; padding: max(18px, env(safe-area-inset-top)) 20px max(18px, env(safe-area-inset-bottom)); background: rgba(15, 18, 16, .38); backdrop-filter: blur(5px); overflow-y: auto; overscroll-behavior: contain; }
 .auth-modal { position: relative; width: min(430px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 24px 70px rgba(0, 0, 0, .22); padding: 20px; }

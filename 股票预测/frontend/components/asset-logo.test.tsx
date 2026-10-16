@@ -30,27 +30,24 @@ describe("asset logo coverage", () => {
     expect([...REMOTE_LOGO_UNAVAILABLE]).toEqual(["301396.SZ"]);
   });
 
-  it("keeps fallback on missing remote logo, and never retries image decoding errors", async () => {
+  it("draws no placeholder art behind a remote logo, and never retries image decoding errors", async () => {
     const asset = ASSET_CATALOG.find((item) => item.symbol === "NVDA")!;
     load.mockResolvedValueOnce(new Blob(["image"]));
     const { container, unmount } = render(<AssetLogo asset={asset} />);
+    expect(container.querySelector(".asset-logo")!.children).toHaveLength(0);
     await waitFor(() => expect(container.querySelector("img")?.src).toBe("blob:logo"));
-    expect(container.querySelector("svg")).not.toBeNull();
-    fireEvent.load(container.querySelector("img")!);
     expect(container.querySelector("svg")).toBeNull();
     fireEvent.error(container.querySelector("img")!);
-    expect(container.querySelector("svg")).not.toBeNull();
-    expect(container.querySelector("img")).toBeNull(); expect(load).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".asset-logo")!.children).toHaveLength(0);
+    expect(load).toHaveBeenCalledTimes(1);
     unmount(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:logo");
   });
-  it("removes the backing chart for transparent local logos and resets for a different logo", () => {
+  it("shows only the image for transparent local logos, including after switching logos", () => {
     const { container, rerender } = render(<AssetLogo asset={ASSET_CATALOG.find(item => item.symbol === "QQQ")!} />);
-    fireEvent.load(container.querySelector("img")!);
-    expect(container.querySelector("svg")).toBeNull();
+    expect([...container.querySelector(".asset-logo")!.children].map((child) => child.tagName)).toEqual(["IMG"]);
     rerender(<AssetLogo asset={ASSET_CATALOG.find(item => item.symbol === "SMH")!} />);
-    expect(container.querySelector("svg")).not.toBeNull();
-    fireEvent.load(container.querySelector("img")!);
-    expect(container.querySelector("svg")).toBeNull();
+    expect([...container.querySelector(".asset-logo")!.children].map((child) => child.tagName)).toEqual(["IMG"]);
+    expect(container.querySelector("img")!.getAttribute("src")).toBe("/logos/vaneck.svg");
   });
   it("defers fetching until near viewport and ignores responses after unmount", async () => {
     let intersect!: (entries: { isIntersecting: boolean }[]) => void;
