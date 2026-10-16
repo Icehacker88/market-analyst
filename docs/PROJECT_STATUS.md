@@ -53,14 +53,28 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 | 共享规则、任务看板、交接记录 | `AGENTS.md`、`CLAUDE.md`、`docs/TASKS.md`、本文件（PR #1 及其后续 PR，未合并） | 人工：每个 Agent 开始/结束任务时读写 |
 | 需求拆分与分配 | 接收需求的 Agent 写入 `docs/TASKS.md` | 人工：用户向某个 Agent 提出需求 |
 | 独立开发 | 每个任务独立分支 + worktree（Codex：`~/.codex/worktrees/`；Claude Code：`~/.claude/worktrees/`） | 人工：用户打开对应 Agent 会话 |
-| PR 自动测试 | `.github/workflows/pr-checks.yml` 已提交为 PR，**尚未合并**：前端 typecheck + vitest，Python unittest + backend pytest；只读、无 secret、不部署 | 合并后自动：每个 PR |
-| PR 交接模板 | `.github/pull_request_template.md`，与上面同一 PR，尚未合并 | 合并后自动：新建 PR 时预填 |
+| PR 自动测试 | `.github/workflows/pr-checks.yml` 在分支 `claude/pr-checks-20261016` 上，**分支已推送，PR 尚未创建，未在 GitHub 运行过**：前端 Worker 生成 + typecheck + vitest，Python unittest + backend pytest；只读、无 secret、不部署。**不包含 Cloudflare 完整构建**（`build:cloudflare`），通过不等于可部署 | 合并后自动：每个 PR |
+| PR 交接模板 | `.github/pull_request_template.md`，与上面同一分支，PR 尚未创建 | 合并后自动：新建 PR 时预填 |
 | 交叉 Code Review | 规则已写入 `AGENTS.md`；没有任何集成让一方自动审另一方 PR | 人工：用户让另一 Agent 审阅 PR 编号 |
 | 合并 main | 人工决定 | 人工 |
-| main 分支保护 | 未配置（未核验）。注意：Daily Market Report 直接向 main 推送预测账本，配置“必须走 PR”时需让 GitHub Actions 例外，否则会中断账本提交 | 用户在 GitHub 设置 |
+| main 分支保护 | 尚未核验是否已有规则。方案见下文“main 分支保护方案” | 用户在 GitHub 设置 |
 | 本机 GitHub CLI | 2026-10-16 本机没有 `gh`，Claude Code 只能 push 分支，PR 需用户点 compare 链接创建；Codex 集成此前创建 PR 返回 403 | 用户安装并登录 `gh` 后可由 Agent 创建 PR 和发表评审 |
 
-本地核验（2026-10-16，Claude Code）：`origin/main` 5534388 前端 27 文件 / 72 测试通过、typecheck 通过；`codex/authentication-round1` 75289a7 前端 54 文件 / 346 测试通过、typecheck 通过；两者 Python unittest 22 项、backend pytest 7 项通过（本机 Python 3.13，CI 使用 3.11）。
+本地核验（2026-10-16，Claude Code）：`origin/main` 5534388 前端 27 文件 / 72 测试通过、typecheck 通过；`codex/authentication-round1` 75289a7 前端 54 文件 / 346 测试通过、typecheck 通过；两者 Python unittest 22 项、backend pytest 7 项通过（本机 Python 3.13，CI 使用 3.11）。这些是本机结果，GitHub 上尚未运行。
+
+### main 分支保护方案（待用户决定，未实施）
+
+约束：`Persist prediction ledger` 步骤以 `GITHUB_TOKEN`（显示为 `github-actions[bot]`）对 `main` 执行普通 `git pull --rebase` + `git push`，workflow 已有 `contents: write`。任何对直接推送生效的“必须走 PR”或“必须通过状态检查”规则都会拦截这次推送。GitHub 规则集的绕过名单只接受角色、团队、GitHub App 和 Dependabot；`GITHUB_TOKEN` 能否作为绕过者没有官方文档说明，须在设置页实际确认，不能假设。
+
+分两步：
+
+1. **现在即可做，不影响账本**：在 Settings → Rules → Rulesets 新建针对 `main` 的规则集，只启用“Restrict deletions”和“Block force pushes”，绕过名单留空。账本步骤是普通推送，不受影响。
+2. **要求 PR + PR Checks 时**（`pr-checks.yml` 合并并在 GitHub 跑绿之后）：启用“Require a pull request before merging”和必需状态检查 `frontend`、`python`。账本推送需要一个绕过身份，按以下顺序选一个：
+   - a. 若规则集绕过名单里能选到 GitHub Actions：加入该规则集，模式 “Always allow”，只限这一个规则集；workflow 权限不变。合并后观察一次账本运行成功再算完成。
+   - b. 否则建一个只装在本仓库的专用 GitHub App，权限仅 Contents: Read and write（不给 Workflows、Administration 等）。把它加入绕过名单；App ID 和私钥存为 Actions secrets；只在 `Persist prediction ledger` 一步用 `actions/create-github-app-token` 换取短时令牌推送，其余步骤仍用只读的默认令牌。这会修改生产 workflow 并新增凭据，必须单独授权。
+   - 管理员角色是否也放入绕过名单（模式 “For pull requests only”，便于紧急合并）由用户决定。
+
+在第 2 步完成并验证账本仍能写入之前，不要启用“Require a pull request”。
 
 ## 下一步
 
