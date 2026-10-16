@@ -19,15 +19,30 @@ These rules apply to GPT-6 Astra/Codex, Claude Opus 5.5/Claude Code, and human c
 
 ## Division of work
 
-- **Codex / GPT-6 Astra:** default integrator and repo-wide coordinator; inspect task state, define bounded work and file ownership, implement cross-cutting/backend/Python/Actions changes when assigned, run scoped checks, review Claude's PRs, reconcile conflicts, and update status/handoff docs.
-- **Claude Code / Claude Opus 5.5:** default independent implementation partner for assigned frontend/UI or other explicitly scoped tasks; inspect current code and rules first, work only in its assigned branch/worktree, document decisions and test evidence, and open a PR for review.
-- Either model may implement another area when the task board explicitly assigns it. Neither model may self-approve its own changes or treat a second model's review as human authorization for a protected action.
+- Codex and Claude Code are peers; neither is permanently senior. Coordination is a per-request role: the agent that receives a user request splits it into bounded tasks, proposes owners and file ownership in `docs/TASKS.md`, and the other agent may challenge the split before work starts.
+- **Codex / GPT-6 Astra default strengths:** backend and API work, Python data processing and models, data storage, GitHub Actions, automated tests, system architecture, and performance.
+- **Claude Code / Claude Opus 5.5 default strengths:** frontend, UI/UX, page interactions, complex code review, and frontend performance.
+- These defaults guide assignment; they are not limits. Either model may take any area when the task board assigns it, and either may propose architecture changes or review the other's code. Neither model may self-approve its own changes or treat a second model's review as human authorization for a protected action.
 - Parallelize only disjoint paths or clearly separable interfaces. For shared files, agree on one owner and interface first; integrate sequentially.
+
+## Request lifecycle
+
+1. The user states a requirement to either agent.
+2. The receiving agent checks current GitHub state, splits the work into bounded tasks, and records each task in `docs/TASKS.md` with owner, branch, file ownership, and acceptance checks.
+3. Each owner works in its own branch/worktree and opens a PR with the handoff fields from `.github/pull_request_template.md` (once that template is on `main`).
+4. The other agent reviews the PR; required PR checks must pass.
+5. The author fixes findings and conflicts; the user (or a policy the user has written into this file) decides the merge.
+6. After merge, the author updates `docs/PROJECT_STATUS.md` and `docs/TASKS.md`, then the next task starts.
+
+Only steps backed by a GitHub feature (PR checks, templates) run automatically. Starting an agent, assigning work to it, and posting reviews are manual unless `docs/PROJECT_STATUS.md` records that an integration has been installed and verified. Do not describe a documented step as automated.
+
+Ask the user before: major architecture changes; deleting important features or data; adding paid services; changing production configuration or data; any Preview or Production deployment; and conflicts the agents cannot resolve without discarding someone's work.
 
 ## Review, checks, and merge
 
-- Open a PR targeting `main` for every change intended for the shared repository. Include purpose, scope, evidence, tests/checks, data/deployment impact, and rollback notes when applicable. Keep PRs small enough to review.
+- Open a PR targeting `main` for every change intended for the shared repository. Exception: a PR that depends on another unmerged PR may target that PR's branch, so its diff shows only its own changes. Say so in the PR description and record the prerequisite in `docs/TASKS.md`. After the prerequisite merges, confirm the dependent PR now targets `main` (retarget it if GitHub did not), re-check its diff against `main`, and re-run its checks before review continues. Include purpose, scope, evidence, tests/checks, data/deployment impact, and rollback notes when applicable. Keep PRs small enough to review.
 - The author runs checks appropriate to changed paths and records exact commands and outcomes. Do not claim a test passed if it was not run. Review current Actions and required checks before merge; fix failures and inspect the final diff.
+- Cross-review: before a PR is merged, the agent that did not author it reviews the final diff and records a verdict (`approve`, `request changes`, or `comment`) with findings in the PR conversation. If that agent cannot write to GitHub, it gives the review to the user to paste, and the PR records who reviewed it. Fix or explicitly answer every blocking finding before merge.
 - A model may review but may not merge its own PR. Require a human review/merge decision unless the user has explicitly established a different repository policy. Never bypass branch protections or required checks.
 - Resolve conflicts by fetching current `main`, rebasing or merging only the task branch as repository policy allows, then re-running affected checks. Never resolve by discarding another contributor's changes without authorization. Record resolutions in the PR.
 - After merge, verify the merge commit and Actions result, update `docs/PROJECT_STATUS.md` and `docs/TASKS.md`, and identify whether deployment occurred. A successful merge is not proof of deployment.
