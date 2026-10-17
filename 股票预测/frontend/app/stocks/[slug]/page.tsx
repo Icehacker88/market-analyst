@@ -55,6 +55,6 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
       <p>{profile.summary_zh}</p>
       <div className="stock-profile-tags">{profile.focus_zh.map((item) => <span key={item}>{item}</span>)}</div>
     </section>
-    <Suspense><Dashboard initialSymbols={[asset.symbol]} /></Suspense>
+    <Suspense><Dashboard initialSymbols={[asset.symbol]} enableResearchRecords /></Suspense>
   </>;
 }

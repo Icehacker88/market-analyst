@@ -1,6 +1,5 @@
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
-import { getUser } from "@netlify/identity";
 import { pinyin } from "pinyin-pro";
 import publicData from "./data/public-data.json" with { type: "json" };
 import { sendEmail } from "./_shared/market-email.ts";
@@ -260,7 +259,7 @@ type AiAnalysis = {
   watch_items: string[];
   questions: string[];
 };
-type AuthUser = { id: string; email: string; name?: string; pictureUrl?: string | null; confirmedAt?: string };
+type AuthUser = { id: string; email: string; is_admin?: boolean; name?: string; pictureUrl?: string | null; confirmedAt?: string };
 type AuthRecord = AuthUser & { salt: string; password_hash: string; created_at: string; provider?: "email" | "google" | "apple"; google_sub?: string; apple_sub?: string; updated_at?: string };
 type AuthSession = { token: string; user_id: string; email: string; expires_at: string };
 
@@ -551,20 +550,40 @@ const GITHUB_OIDC_AUDIENCE = "orivane-kronos";
 const GITHUB_OIDC_REPOSITORY = "Icehacker88/market-analyst";
 const GEMINI_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"];
 
+type ApiStoreOptions = { name: string; consistency?: "strong" | "eventual" };
+type ApiStore = {
+  get: (key: string, options?: { type?: "text" | "json" | "arrayBuffer" }) => Promise<any>;
+  set: (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream) => Promise<unknown>;
+  setJSON: (key: string, value: unknown) => Promise<unknown>;
+  delete: (key: string) => Promise<void>;
+  list: (options?: { prefix?: string }) => Promise<{ blobs: Array<{ key: string }> }>;
+};
+type ApiDependencies = {
+  env: Record<string, string | undefined>;
+  getStore: (options: ApiStoreOptions) => ApiStore;
+  getDeployStore: (options: ApiStoreOptions) => ApiStore;
+  sendEmail: (to: string, subject: string, html: string) => Promise<boolean>;
+};
+
+const METRIC_SAMPLE_RATE = 0.1;
+
+// Each invocation owns its environment, storage adapters and asynchronous work.
+// Public catalog data above is immutable and contains no request identity.
+export function createApi({ env, getStore, getDeployStore, sendEmail }: ApiDependencies) {
 function marketDataProvider(): string {
-  return (process.env.ORIVANE_MARKET_DATA_PROVIDER || "free-yahoo-eastmoney").trim();
+  return (env.ORIVANE_MARKET_DATA_PROVIDER || "free-yahoo-eastmoney").trim();
 }
 
 function configuredGeminiModel(): string {
-  return (process.env.GEMINI_MODEL || "gemini-3.5-flash").trim().replace(/^['"]|['"]$/g, "");
+  return (env.GEMINI_MODEL || "gemini-3.5-flash").trim().replace(/^['"]|['"]$/g, "");
 }
 
 function aiDailyLimit(): number {
-  return Math.max(1, Number(process.env.ORIVANE_AI_DAILY_LIMIT || 20));
+  return Math.max(1, Number(env.ORIVANE_AI_DAILY_LIMIT || 20));
 }
 
 function adminEmails(): string[] {
-  return (process.env.ORIVANE_ADMIN_EMAILS || "m18331893110@gmail.com")
+  return (env.ORIVANE_ADMIN_EMAILS || "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
@@ -599,7 +618,6 @@ type MetricsBucket = {
   updated_at: string;
 };
 
-const METRIC_SAMPLE_RATE = 0.1;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: HEADERS });
@@ -740,7 +758,7 @@ async function metricsSummary(): Promise<Record<string, unknown>> {
   }));
   return {
     provider: marketDataProvider(),
-    paid_provider_ready: Boolean(process.env.POLYGON_API_KEY || process.env.FMP_API_KEY || process.env.TWELVE_DATA_API_KEY),
+    paid_provider_ready: Boolean(env.POLYGON_API_KEY || env.FMP_API_KEY || env.TWELVE_DATA_API_KEY),
     metric_sample_rate: METRIC_SAMPLE_RATE,
     favorite_optimizer: favoriteOptimizer,
     ...(bucket || emptyMetrics()),
@@ -832,7 +850,7 @@ async function marketProviderHealth(): Promise<Record<string, unknown>> {
     yahoo_finance: yahooAvailable ? "available" : "unavailable",
     eastmoney_data: eastmoneyAvailable ? "available" : "unavailable",
     market_data_provider: marketDataProvider(),
-    paid_provider_ready: Boolean(process.env.POLYGON_API_KEY || process.env.FMP_API_KEY || process.env.TWELVE_DATA_API_KEY),
+    paid_provider_ready: Boolean(env.POLYGON_API_KEY || env.FMP_API_KEY || env.TWELVE_DATA_API_KEY),
     last_updated: new Date().toISOString(),
   };
 }
@@ -861,7 +879,7 @@ async function providerHealthSnapshot(context: Context): Promise<Record<string, 
     yahoo_finance: "checking",
     eastmoney_data: "checking",
     market_data_provider: marketDataProvider(),
-    paid_provider_ready: Boolean(process.env.POLYGON_API_KEY || process.env.FMP_API_KEY || process.env.TWELVE_DATA_API_KEY),
+    paid_provider_ready: Boolean(env.POLYGON_API_KEY || env.FMP_API_KEY || env.TWELVE_DATA_API_KEY),
     last_updated: new Date().toISOString(),
     probe_pending: true,
   };
@@ -3106,6 +3124,7 @@ function publicAuthUser(record: AuthRecord): AuthUser {
     name: record.name,
     pictureUrl: record.pictureUrl || null,
     confirmedAt: record.confirmedAt,
+    is_admin: isAdminEmail(record.email),
   };
 }
 
@@ -3167,7 +3186,7 @@ function authCookie(token: string, maxAge = 30 * 86400): string {
 }
 
 function authToken(request: Request): string | null {
-  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1] || cookieValue(request, "orivane_session");
+  return cookieValue(request, "orivane_session");
 }
 
 function authSessionResponse(session: { token: string; user: AuthUser }): Response {
@@ -3180,7 +3199,8 @@ function authSessionResponse(session: { token: string; user: AuthUser }): Respon
 function cookieValue(request: Request, name: string): string | null {
   const header = request.headers.get("cookie") || "";
   const found = header.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
-  return found ? decodeURIComponent(found.slice(name.length + 1)) : null;
+  if (!found) return null;
+  try { return decodeURIComponent(found.slice(name.length + 1)) || null; } catch { return null; }
 }
 
 function originOf(request: Request): string {
@@ -3199,20 +3219,20 @@ async function userFromSessionToken(request: Request, context?: Context): Promis
   if (!token) return null;
   const store = authStore(context);
   const session = await store.get(authSessionKey(token), { type: "json" }) as AuthSession | null;
-  if (!session) return null;
-  if (new Date(session.expires_at).getTime() < Date.now()) {
+  if (!session || session.token !== token || typeof session.user_id !== "string" || !session.user_id
+    || typeof session.email !== "string" || !session.email) return null;
+  const expiresAt = typeof session.expires_at === "string" ? Date.parse(session.expires_at) : NaN;
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
     await store.delete(authSessionKey(token)).catch(() => undefined);
     return null;
   }
   const record = await store.get(authUserKey(session.email), { type: "json" }) as AuthRecord | null;
-  return record ? publicAuthUser(record) : null;
+  if (!record || record.id !== session.user_id || record.email !== session.email) return null;
+  return publicAuthUser(record);
 }
 
 async function currentUser(request: Request, context?: Context): Promise<AuthUser | null> {
-  const sessionUser = await userFromSessionToken(request, context).catch(() => null);
-  if (sessionUser) return sessionUser;
-  const legacyUser = await getUser().catch(() => null);
-  return legacyUser?.id ? { id: legacyUser.id, email: legacyUser.email || "", name: legacyUser.name, pictureUrl: legacyUser.pictureUrl || null, confirmedAt: legacyUser.confirmedAt } : null;
+  return userFromSessionToken(request, context).catch(() => null);
 }
 
 async function authResponse(request: Request, context: Context): Promise<Response> {
@@ -3220,8 +3240,8 @@ async function authResponse(request: Request, context: Context): Promise<Respons
   const path = url.pathname.replace(/^\/(?:api|\.netlify\/functions\/api)/, "") || "/";
   if (request.method === "GET" && path === "/auth/config") {
     return privateJson({ data: {
-      googleEnabled: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
-      appleEnabled: Boolean(process.env.APPLE_CLIENT_ID && process.env.APPLE_CLIENT_SECRET),
+      googleEnabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+      appleEnabled: Boolean(env.APPLE_CLIENT_ID && env.APPLE_CLIENT_SECRET),
       signupEnabled: true,
     } });
   }
@@ -3229,8 +3249,8 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     return privateJson({ data: await currentUser(request, context) });
   }
   if (request.method === "GET" && path === "/auth/google/start") {
-    const clientId = (process.env.GOOGLE_CLIENT_ID || "").trim();
-    const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
+    const clientId = (env.GOOGLE_CLIENT_ID || "").trim();
+    const clientSecret = (env.GOOGLE_CLIENT_SECRET || "").trim();
     if (!clientId || !clientSecret) return privateJson({ error: { code: "google_not_configured", message: "Google 登录尚未配置。" } }, 503);
     const state = crypto.randomUUID();
     const next = safeNextPath(url.searchParams.get("next"));
@@ -3260,8 +3280,8 @@ async function authResponse(request: Request, context: Context): Promise<Respons
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: (process.env.GOOGLE_CLIENT_ID || "").trim(),
-        client_secret: (process.env.GOOGLE_CLIENT_SECRET || "").trim(),
+        client_id: (env.GOOGLE_CLIENT_ID || "").trim(),
+        client_secret: (env.GOOGLE_CLIENT_SECRET || "").trim(),
         redirect_uri: `${originOf(request)}/api/auth/google/callback`,
         grant_type: "authorization_code",
       }),
@@ -3304,8 +3324,8 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     });
   }
   if (request.method === "GET" && path === "/auth/apple/start") {
-    const clientId = (process.env.APPLE_CLIENT_ID || "").trim();
-    const clientSecret = (process.env.APPLE_CLIENT_SECRET || "").trim();
+    const clientId = (env.APPLE_CLIENT_ID || "").trim();
+    const clientSecret = (env.APPLE_CLIENT_SECRET || "").trim();
     if (!clientId || !clientSecret) return privateJson({ error: { code: "apple_not_configured", message: "Apple 登录尚未配置。" } }, 503);
     const state = crypto.randomUUID();
     const next = safeNextPath(url.searchParams.get("next"));
@@ -3329,13 +3349,13 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     if (state && savedState) await store.delete(authAppleStateKey(state)).catch(() => undefined);
     const next = safeNextPath(savedState?.next);
     if (!code || !savedState?.expires_at || new Date(savedState.expires_at).getTime() < Date.now()) return Response.redirect(`${originOf(request)}${next}?auth=failed`, 302);
-    const clientId = (process.env.APPLE_CLIENT_ID || "").trim();
+    const clientId = (env.APPLE_CLIENT_ID || "").trim();
     const tokenResponse = await fetch("https://appleid.apple.com/auth/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: clientId,
-        client_secret: (process.env.APPLE_CLIENT_SECRET || "").trim(),
+        client_secret: (env.APPLE_CLIENT_SECRET || "").trim(),
         code,
         grant_type: "authorization_code",
         redirect_uri: `${originOf(request)}/api/auth/apple/callback`,
@@ -3370,6 +3390,10 @@ async function authResponse(request: Request, context: Context): Promise<Respons
   if (request.method === "DELETE" && path === "/auth/account") {
     const user = await currentUser(request, context);
     if (!user?.id || !user.email) return privateJson({ error: { code: "unauthorized", message: "Please log in first." } }, 401);
+    const expectedUserId = request.headers.get("x-orivane-user-id");
+    if (expectedUserId !== null && expectedUserId !== user.id) {
+      return privateJson({ error: { code: "account_changed", message: "The signed-in account has changed." } }, 403);
+    }
     const store = authStore(context);
     await Promise.all([
       store.delete(`users/${user.id}.json`).catch(() => undefined),
@@ -3383,6 +3407,13 @@ async function authResponse(request: Request, context: Context): Promise<Respons
     return new Response(JSON.stringify({ data: true }), { status: 200, headers: { ...PRIVATE_HEADERS, "set-cookie": authCookie("", 0) } });
   }
   if (request.method === "POST" && path === "/auth/logout") {
+    const expectedUserId = request.headers.get("x-orivane-user-id");
+    if (expectedUserId !== null) {
+      const user = await currentUser(request, context);
+      if (user && expectedUserId !== user.id) {
+        return privateJson({ error: { code: "account_changed", message: "The signed-in account has changed." } }, 403);
+      }
+    }
     const token = authToken(request);
     if (token) await authStore(context).delete(authSessionKey(token)).catch(() => undefined);
     return new Response(JSON.stringify({ data: true }), { status: 200, headers: { ...PRIVATE_HEADERS, "set-cookie": authCookie("", 0) } });
@@ -3435,6 +3466,12 @@ async function authResponse(request: Request, context: Context): Promise<Respons
 async function userState(request: Request, context: Context): Promise<Response> {
   const user = await currentUser(request, context);
   if (!user) return privateJson({ error: { code: "unauthorized", message: "Please log in first." } }, 401);
+  // A stale browser task must never apply its patch using a newer account's cookie.
+  // This header is only a consistency guard, never an authentication source.
+  const expectedUserId = request.headers.get("x-orivane-user-id");
+  if (expectedUserId !== null && expectedUserId !== user.id) {
+    return privateJson({ error: { code: "account_changed", message: "The signed-in account has changed." } }, 403);
+  }
   const store = authStore(context);
   const key = `users/${user.id}.json`;
   if (request.method === "GET") {
@@ -3576,7 +3613,7 @@ function inQuietHours(preferences: Record<string, unknown>, now = new Date()): b
 
 async function processAlerts(request: Request, context: Context): Promise<Response> {
   if (request.method !== "POST") return error(405, "method_not_allowed", "Method not allowed.");
-  const token = (process.env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
+  const token = (env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
   if (!token || request.headers.get("authorization") !== `Bearer ${token}`) return error(403, "forbidden", "Job token required.");
   const store = authStore(context);
   const listed = await store.list({ prefix: "users/" });
@@ -4133,7 +4170,7 @@ async function geminiAnalysis(input: {
   question: string;
   conversation?: Array<{ role: string; content: string }>;
 }): Promise<AiAnalysis> {
-  const apiKey = (process.env.GEMINI_API_KEY || "").trim().replace(/^['"]|['"]$/g, "");
+  const apiKey = (env.GEMINI_API_KEY || "").trim().replace(/^['"]|['"]$/g, "");
   if (!apiKey) throw new AiRequestError(503, "gemini_not_configured", "Gemini API Key 尚未配置。");
   const prompt = aiPrompt(input);
   const followUp = Boolean(input.question.trim());
@@ -4363,7 +4400,7 @@ async function githubOidcAuthorized(request: Request): Promise<boolean> {
 }
 
 async function optimizerOrGithubAuthorized(request: Request): Promise<boolean> {
-  const token = (process.env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
+  const token = (env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
   if (token && request.headers.get("authorization") === `Bearer ${token}`) return true;
   return githubOidcAuthorized(request);
 }
@@ -5150,8 +5187,7 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>): Record<st
 
 async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string | null): Promise<Record<string, unknown> | null> {
   const memory = MEMORY_FORECASTS.get(symbol.toUpperCase()) || null;
-  const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
-  const stored = await store.get(forecastKey(symbol), { type: "json" }).catch(() => null) as Record<string, unknown> | null;
+  const stored = await readStoredForecast(symbol).catch(() => null);
   const cached = memory || stored;
   const generatedAt = typeof cached?.generated_at === "string" ? new Date(cached.generated_at).getTime() : 0;
   if (!cached || !generatedAt || Date.now() - generatedAt > FORECAST_CACHE_MAX_AGE_MS) return null;
@@ -5469,6 +5505,111 @@ async function generateAndFreezeCloudForecast(symbol: string, optimize = true): 
   return freezeCloudForecast(String(forecast.symbol || symbol), forecast);
 }
 
+// Pure storage read shared with the legacy reader. No validation fetch, ledger, or writes.
+function readStoredForecast(symbol: string): Promise<Record<string, unknown> | null> {
+  const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
+  return store.get(forecastKey(symbol), { type: "json" }) as Promise<Record<string, unknown> | null>;
+}
+
+type ReadOnlySource = {
+  source: "history_cache" | "frozen_forecast";
+  status: "available" | "stale" | "unavailable" | "failed";
+  data_as_of: string | null;
+  stored_at: string | null;
+  generated_at: string | null;
+  expires_at: number | null;
+  reason?: string;
+};
+
+async function readOnlyMarketSnapshot(symbol: string): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  const dateValid = (value: unknown): value is string => typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString().slice(0, 10) === value && value <= new Date(now).toISOString().slice(0, 10);
+  const base = (source: ReadOnlySource["source"]): ReadOnlySource => ({ source, status: "unavailable", data_as_of: null, stored_at: null, generated_at: null, expires_at: null });
+  const catalog = CATALOG.find((item) => item.symbol === symbol);
+  let asset = catalog || inferAsset(symbol);
+  const historyMeta = base("history_cache");
+  const forecastMeta = base("frozen_forecast");
+  const errors: Array<{ kind: "history" | "forecast"; code: string; message: string }> = [];
+  let history: Record<string, unknown> | undefined;
+  let forecast: Record<string, unknown> | undefined;
+  let storedForecast: Record<string, unknown> | undefined;
+  // A recent cache write is not proof that the underlying observations are recent.
+  // Four UTC calendar days allows weekends; this is a conservative age cap, not a trading calendar.
+  const observationExpiry = (date: string) => Date.parse(`${date}T23:59:59.999Z`) + 4 * 86400_000;
+  await Promise.all([
+    (async () => {
+      try {
+        const store = getStore({ name: "orivane-api-cache" });
+        // Existing cache keys include type. For uncatalogued Yahoo tickers, probe only
+        // the common stored types; never resolve over the network or calculate history.
+        const types = catalog || asset.asset_type !== "market" ? [asset.asset_type] : ["market", "stock", "etf"] as Asset["asset_type"][];
+        let cached: CacheEntry<Record<string, unknown>> | null = null;
+        for (const type of types) {
+          cached = await store.get(cacheKey(`history-v5/recent-${new Date(now).getUTCFullYear() - 4}/${symbol}/${asset.data_source}/${type}`), { type: "json" }) as CacheEntry<Record<string, unknown>> | null;
+          if (cached) { asset = { ...asset, asset_type: type }; break; }
+        }
+        if (!cached) { historyMeta.reason = "not_cached"; return; }
+        const value = cached.value;
+        const snapshot = value?.snapshot as Record<string, unknown> | undefined;
+        if (value?.symbol !== symbol || value?.data_source !== asset.data_source || !dateValid(value?.data_as_of)
+          || typeof snapshot?.latest_price !== "number" || !Number.isFinite(snapshot.latest_price) || snapshot.latest_price <= 0) throw new Error("Invalid stored history.");
+        const storedAt = Date.parse(cached.stored_at);
+        const expiresAt = Math.min(cached.expires_at, storedAt + 30 * 60_000, observationExpiry(value.data_as_of));
+        const validAge = Number.isFinite(storedAt) && storedAt <= now && Number.isFinite(cached.expires_at) && cached.expires_at > storedAt;
+        Object.assign(historyMeta, { data_as_of: value.data_as_of, stored_at: validAge ? cached.stored_at : null, expires_at: validAge ? expiresAt : null,
+          status: validAge && expiresAt > now ? "available" : "stale", reason: validAge ? expiresAt > now ? undefined : "cache_expired" : "unknown_cache_age" });
+        const numberOrNull = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
+        history = { symbol, data_source: value.data_source, data_as_of: value.data_as_of, records: [], snapshot: {
+          latest_price: snapshot.latest_price, return_1d: numberOrNull(snapshot.return_1d),
+          annualized_volatility_20d: numberOrNull(snapshot.annualized_volatility_20d),
+        } };
+      } catch {
+        historyMeta.status = "failed"; historyMeta.reason = "cache_read_or_validation_failed";
+      }
+    })(),
+    (async () => {
+      try {
+        const value = await readStoredForecast(symbol);
+        if (!value) { forecastMeta.reason = "not_cached"; return; }
+        if (value.symbol !== symbol || !dateValid(value.data_as_of) || !["Up", "Down", "Observe"].includes(String(value.signal))
+          || typeof value.forecast_1m_return !== "number" || !Number.isFinite(value.forecast_1m_return)) throw new Error("Invalid stored forecast.");
+        const generatedAt = typeof value.generated_at === "string" ? Date.parse(value.generated_at) : NaN;
+        const validAge = Number.isFinite(generatedAt) && generatedAt <= now;
+        const expiresAt = validAge ? Math.min(generatedAt + FORECAST_CACHE_MAX_AGE_MS, observationExpiry(value.data_as_of as string)) : null;
+        Object.assign(forecastMeta, { data_as_of: value.data_as_of, generated_at: validAge ? value.generated_at : null, expires_at: expiresAt,
+          status: expiresAt && expiresAt > now ? "available" : "stale", reason: validAge ? expiresAt! > now ? undefined : "forecast_expired" : "unknown_generation_time" });
+        storedForecast = value;
+      } catch {
+        forecastMeta.status = "failed"; forecastMeta.reason = "cache_read_or_validation_failed";
+      }
+    })(),
+  ]);
+  if (forecastMeta.status === "available" && historyMeta.data_as_of && forecastMeta.data_as_of !== historyMeta.data_as_of) {
+    forecastMeta.status = "stale"; forecastMeta.reason = "market_date_mismatch";
+  }
+  if (storedForecast) {
+    try {
+      // The guard is pure, but may assume freshness. Only apply it to complete, aligned sources.
+      const guarded = historyMeta.status === "available" && forecastMeta.status === "available"
+        ? applyCurrentForecastGuard(storedForecast) : storedForecast;
+      const levels = guarded.key_levels as Record<string, unknown> | undefined;
+      forecast = { symbol, data_as_of: storedForecast.data_as_of, generated_at: forecastMeta.generated_at, signal: guarded.signal,
+        forecast_1m_return: storedForecast.forecast_1m_return, confidence_score: toNumber(storedForecast.confidence_score),
+        key_levels: { invalidation: toNumber(levels?.invalidation) } };
+    } catch {
+      forecastMeta.status = "failed"; forecastMeta.reason = "stored_forecast_guard_failed";
+    }
+  }
+  for (const [kind, meta] of [["history", historyMeta], ["forecast", forecastMeta]] as const) {
+    if (meta.status === "failed" || meta.status === "unavailable") errors.push({ kind, code: meta.status, message: meta.reason || meta.status });
+  }
+  return { asset, ...(history ? { history } : {}), ...(forecast ? { forecast } : {}), errors,
+    read_only: { version: 1, queried_at: new Date(now).toISOString(), query_status: [historyMeta, forecastMeta].some((m) => m.status === "failed") ? "failed" : "complete",
+      history: historyMeta, forecast: forecastMeta } };
+}
+
 async function marketSnapshots(symbols: string[], start: string, view: "full" | "lite", include: "all" | "history" | "forecast"): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   for (let offset = 0; offset < symbols.length; offset += 4) {
@@ -5558,8 +5699,10 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (request.method === "POST" && path === "/assets/resolve") {
     const symbols = (await parseBody(request)).symbols;
     if (!Array.isArray(symbols)) return error(422, "validation_error", "Symbols must be an array.");
-    const resolved = await Promise.all(symbols.map((item) => resolveAsset(String(item))));
-    const assets = [...new Map(resolved.map((asset) => [asset.symbol, asset])).values()].slice(0, MAX_COMPARE_ASSETS);
+    const requested = [...new Set(symbols.map((item) => String(item).trim().toUpperCase()).filter(Boolean))];
+    const resolved = await Promise.all(requested.map((symbol) => resolveAsset(symbol)));
+    // Watchlists use this general resolver; only /compare owns the comparison limit.
+    const assets = [...new Map(resolved.map((asset) => [asset.symbol, asset])).values()];
     return json({ assets });
   }
   if (request.method === "GET" && path === "/market/history") {
@@ -5575,6 +5718,14 @@ async function route(request: Request, context: Context): Promise<Response> {
     }
   }
   if (request.method === "GET" && path === "/market/snapshot") {
+    const mode = url.searchParams.get("mode");
+    if (mode !== null) {
+      if (mode !== "read-only") return error(422, "validation_error", "Unknown snapshot mode.");
+      const symbols = [...new Set(String(url.searchParams.get("symbols") || "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean))];
+      if (!symbols.length || symbols.length > 4 || symbols.some((symbol) => !/^[A-Z0-9.^=-]{1,32}$/.test(symbol))) return error(422, "validation_error", "Read-only snapshots require 1–4 valid symbols.");
+      // Separate mode/URL; no batch cache, no metric writes, no hidden loader fallback.
+      return new Response(JSON.stringify({ data: await Promise.all(symbols.map(readOnlyMarketSnapshot)) }), { headers: PRIVATE_HEADERS });
+    }
     const symbols = [...new Set(String(url.searchParams.get("symbols") || "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean))].slice(0, 20);
     const start = /^\d{4}-\d{2}-\d{2}$/.test(String(url.searchParams.get("start") || "")) ? String(url.searchParams.get("start")) : "2025-01-01";
     const view = url.searchParams.get("view") === "full" ? "full" : "lite";
@@ -5680,7 +5831,7 @@ async function route(request: Request, context: Context): Promise<Response> {
     }
   }
   if (request.method === "POST" && path === "/forecast/run") {
-    const jobToken = (process.env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
+    const jobToken = (env.ORIVANE_OPTIMIZER_TOKEN || "").trim();
     const authorizedJob = Boolean(jobToken && request.headers.get("authorization") === `Bearer ${jobToken}`);
     const signedInUser = authorizedJob ? null : await currentUser(request, context).catch(() => null);
     if (!authorizedJob && !signedInUser) return privateJson({ error: { code: "unauthorized", message: "Sign in is required to refresh a forecast." } }, 401);
@@ -5697,21 +5848,28 @@ async function route(request: Request, context: Context): Promise<Response> {
   return error(404, "not_found", "Endpoint not found.");
 }
 
-export default async (request: Request, context: Context): Promise<Response> => {
+const handle = async (request: Request, context: Context): Promise<Response> => {
   const started = Date.now();
   const url = new URL(request.url);
+  const readOnlySnapshot = request.method === "GET" && url.searchParams.get("mode") === "read-only" && /^\/(?:api|\.netlify\/functions\/api)\/market\/snapshot$/.test(url.pathname);
   const metricPath = `${request.method} ${url.pathname.replace(/^\/(?:api|\.netlify\/functions\/api)/, "") || "/"}`;
   try {
     const response = await route(request, context);
-    if (shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
+    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
       context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     }
     return response;
   } catch (cause) {
     const response = error(500, "internal_error", cause instanceof Error ? cause.message : "Unexpected error.");
-    if (shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
+    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     return response;
   }
 };
+
+return { handle, recordCacheMetric };
+}
+
+export default (request: Request, context: Context): Promise<Response> =>
+  createApi({ env: process.env, getStore, getDeployStore, sendEmail }).handle(request, context);
 
 export const config: Config = { path: "/api/*" };

@@ -1,9 +1,11 @@
 "use client";
 
-import { clearAuthSession, deleteAccountApi, getAuthConfig, getCurrentUser, loginWithEmailApi, readStoredAuthUser, signupWithEmailApi, startAppleLogin, storeAuthSession } from "@/lib/api";
+import { clearAuthSession, deleteAccountApi, getAuthConfig, getCurrentUser, loginWithEmailApi, signupWithEmailApi, startAppleLogin, storeAuthSession } from "@/lib/api";
+import { clearPrivateStorage } from "@/lib/private-storage";
+import { clearQueuedStatePatches } from "@/lib/offline-store";
 import { trackEvent } from "@/lib/analytics";
 import type { AuthUser } from "@/lib/types";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 type AuthContextValue = {
   user: AuthUser | null;
@@ -32,68 +34,127 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [signupEnabled, setSignupEnabled] = useState(true);
   const [callbackMessage, setCallbackMessage] = useState<"confirmed" | "oauth" | "">("");
 
+  const epoch = useRef(0);
+  const mutationRunning = useRef(false);
+  const mounted = useRef(true);
+
   useEffect(() => {
+    mounted.current = true;
     let active = true;
-    let oauthCallback = false;
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      const auth = url.searchParams.get("auth");
-      if (auth === "google" || auth === "apple") {
-        oauthCallback = true;
-        setCallbackMessage("oauth");
+    const url = new URL(window.location.href);
+    const auth = url.searchParams.get("auth");
+    if (auth === "google" || auth === "apple") setCallbackMessage("oauth");
+    url.searchParams.delete("auth");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    void getAuthConfig().then((config) => {
+      if (!active) return;
+      setGoogleEnabled(config.googleEnabled);
+      setAppleEnabled(config.appleEnabled);
+      setSignupEnabled(config.signupEnabled);
+    }).catch(() => undefined);
+
+    const verifySession = async () => {
+      if (!active || mutationRunning.current) return;
+      const currentEpoch = ++epoch.current;
+      setUser(null);
+      setLoading(true);
+      try {
+        // Cookie validation is authoritative, including when no local metadata exists.
+        const verifiedUser = await getCurrentUser();
+        if (!active || currentEpoch !== epoch.current) return;
+        setUser(verifiedUser);
+        if (verifiedUser) storeAuthSession({ user: verifiedUser });
+        else clearAuthSession();
+      } catch {
+        if (!active || currentEpoch !== epoch.current) return;
+        clearAuthSession();
+        setUser(null);
+      } finally {
+        if (active && currentEpoch === epoch.current) setLoading(false);
       }
-      url.searchParams.delete("auth");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-    }
-    const stored = readStoredAuthUser();
-    if (stored) setUser(stored);
-    const currentUserRequest = stored || oauthCallback ? getCurrentUser() : Promise.resolve(null);
-    void Promise.allSettled([getAuthConfig(), currentUserRequest])
-      .then(([configResult, userResult]) => {
-        if (!active) return;
-        if (configResult.status === "fulfilled") {
-          setGoogleEnabled(configResult.value.googleEnabled);
-          setAppleEnabled(configResult.value.appleEnabled);
-          setSignupEnabled(configResult.value.signupEnabled);
-        }
-        const currentUser = userResult.status === "fulfilled" ? userResult.value : null;
-        setUser(currentUser);
-        if (!currentUser) clearAuthSession();
-        else {
-          localStorage.removeItem("orivane-auth-token");
-          localStorage.setItem("orivane-auth-user", JSON.stringify(currentUser));
-        }
-      })
-      .catch(() => {
-        if (!stored) clearAuthSession();
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
+    };
+    const storageChanged = (event: StorageEvent) => {
+      if (event.key === null || event.key === "orivane-auth-user-id" || event.key === "orivane-auth-user" || event.key === "orivane-auth-token") void verifySession();
+    };
+    const focused = () => { void verifySession(); };
+    const authRejected = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: string | null; scope?: string }>).detail;
+      if (detail?.scope === "session") {
+        // Recheck the current cookie; an old request must not sign out a newer account.
+        void verifySession();
+      } else if (detail?.scope === "admin") {
+        setUser((current) => current && (!detail.userId || current.id === detail.userId) ? { ...current, is_admin: false } : current);
+      }
+    };
+    void verifySession();
+    window.addEventListener("storage", storageChanged);
+    window.addEventListener("focus", focused);
+    window.addEventListener("orivane-auth-rejected", authRejected);
+    return () => {
+      active = false;
+      mounted.current = false;
+      epoch.current += 1;
+      window.removeEventListener("storage", storageChanged);
+      window.removeEventListener("focus", focused);
+      window.removeEventListener("orivane-auth-rejected", authRejected);
+    };
+  }, []);
+
+  const beginMutation = useCallback(() => {
+    if (mutationRunning.current) throw new Error("An account change is already in progress.");
+    mutationRunning.current = true;
+    const currentEpoch = ++epoch.current;
+    setUser(null);
+    setLoading(true);
+    return currentEpoch;
   }, []);
 
   const loginWithEmail = useCallback(async (email: string, password: string) => {
-    const session = await loginWithEmailApi(email, password);
-    storeAuthSession(session);
-    setUser(session.user);
-    trackEvent("login");
-    return session.user;
-  }, []);
+    const currentEpoch = beginMutation();
+    try {
+      const session = await loginWithEmailApi(email, password);
+      if (mounted.current && currentEpoch === epoch.current) {
+        storeAuthSession(session);
+        setUser(session.user);
+        trackEvent("login");
+      }
+      return session.user;
+    } finally {
+      mutationRunning.current = false;
+      if (mounted.current && currentEpoch === epoch.current) setLoading(false);
+    }
+  }, [beginMutation]);
 
   const signupWithEmail = useCallback(async (email: string, password: string, name: string) => {
-    const session = await signupWithEmailApi(email, password, name);
-    storeAuthSession(session);
-    setUser(session.user);
-    trackEvent("login");
-    return session.user;
-  }, []);
+    const currentEpoch = beginMutation();
+    try {
+      const session = await signupWithEmailApi(email, password, name);
+      if (mounted.current && currentEpoch === epoch.current) {
+        storeAuthSession(session);
+        setUser(session.user);
+        trackEvent("login");
+      }
+      return session.user;
+    } finally {
+      mutationRunning.current = false;
+      if (mounted.current && currentEpoch === epoch.current) setLoading(false);
+    }
+  }, [beginMutation]);
 
   const signOut = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
-    clearAuthSession();
-    setUser(null);
-  }, []);
+    const userId = user?.id;
+    const currentEpoch = beginMutation();
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST", credentials: "include",
+        headers: userId ? { "x-orivane-user-id": userId } : {},
+      }).catch(() => undefined);
+    } finally {
+      clearAuthSession();
+      mutationRunning.current = false;
+      if (mounted.current && currentEpoch === epoch.current) setLoading(false);
+    }
+  }, [beginMutation, user?.id]);
 
   const loginWithGoogle = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -104,11 +165,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithApple = useCallback(() => startAppleLogin(), []);
 
   const deleteAccount = useCallback(async () => {
-    await deleteAccountApi();
-    localStorage.removeItem("orivane-user-state");
-    localStorage.removeItem("orivane-favorites");
-    setUser(null);
-  }, []);
+    const userId = user?.id;
+    const currentEpoch = beginMutation();
+    try {
+      await deleteAccountApi({ expectedUserId: userId });
+      if (userId) {
+        await clearQueuedStatePatches(userId);
+        clearPrivateStorage(userId);
+      }
+      clearAuthSession();
+    } finally {
+      mutationRunning.current = false;
+      if (mounted.current && currentEpoch === epoch.current) setLoading(false);
+    }
+  }, [beginMutation, user?.id]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user,

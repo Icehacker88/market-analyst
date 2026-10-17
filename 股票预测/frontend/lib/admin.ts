@@ -1,9 +1,4 @@
-export const ADMIN_EMAILS = ["m18331893110@gmail.com"];
-
-export function isAdminEmail(email?: string | null): boolean {
-  return Boolean(email && ADMIN_EMAILS.includes(email.trim().toLowerCase()));
-}
-
-export function isAdminUser(user?: { email?: string | null } | null): boolean {
-  return isAdminEmail(user?.email);
+// UI hint only. Every admin API independently authorizes its verified session.
+export function isAdminUser(user?: { is_admin?: boolean } | null): boolean {
+  return user?.is_admin === true;
 }

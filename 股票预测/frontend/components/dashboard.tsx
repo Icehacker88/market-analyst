@@ -9,12 +9,13 @@ import { trackEvent } from "@/lib/analytics";
 import { canonicalizeAsset } from "@/lib/assets";
 import { comparisonColor } from "@/lib/comparison-colors";
 import { dashboardDestination, parseDashboardViewState, rememberRecentSymbol, replaceDashboardLocation, saveComparisonDraft, type DashboardViewState, type DetailTab } from "@/lib/dashboard-state";
-import { compareSeriesFromHistory, FULL_HISTORY_START, isLongHistoryRange, sliceCompareSeries } from "@/lib/history-series";
-import { periodReturn } from "@/lib/periods";
+import { compareSeriesFromHistory, FULL_HISTORY_START, isLongHistoryRange, LONG_HISTORY_RANGES, sliceCompareSeries } from "@/lib/history-series";
+import { fillMissingPeriodReturns, periodReturnsFromHistory, RECENT_RETURN_RANGES, recentRangesWithin } from "@/lib/periods";
 import { scheduleBackgroundTask } from "@/lib/network";
 import { addSymbol, parseSymbols, removeSymbol, startForRange } from "@/lib/selection";
 import type { Asset, CompanyResearch, CompareSeries, Forecast, History, Performance, PeriodReturns, PredictionHistory } from "@/lib/types";
 import type { DetailDataKind } from "./detail-panel";
+import { SingleAssetResearchEntry } from "./research-records";
 import { OverviewCard } from "./overview-card";
 import { ComparisonDecisionTable } from "./comparison-decision-table";
 import { PeriodReturnStrip } from "./period-return-strip";
@@ -43,20 +44,6 @@ type AssetBundle = {
   predictionsLoading?: boolean;
 };
 
-const RECENT_RETURN_RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y"] as const;
-const FULL_RETURN_RANGES = [...RECENT_RETURN_RANGES, "5Y", "10Y", "MAX"] as const;
-
-function periodReturnsFromHistory(history: History, longTermComplete = false): PeriodReturns {
-  const now = new Date(`${history.data_as_of}T12:00:00Z`);
-  const ranges = longTermComplete ? FULL_RETURN_RANGES : RECENT_RETURN_RANGES;
-  return {
-    symbol: history.symbol,
-    data_as_of: history.data_as_of,
-    returns: Object.fromEntries(ranges.map((item) => [item, periodReturn(history.records, item, now)])),
-    long_term_complete: longTermComplete,
-  };
-}
-
 function mergePeriodReturns(previous: PeriodReturns | undefined, incoming: PeriodReturns): PeriodReturns {
   if (!previous) return incoming;
   return {
@@ -66,8 +53,8 @@ function mergePeriodReturns(previous: PeriodReturns | undefined, incoming: Perio
   };
 }
 
-export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }) {
-  const { language, t } = useApp();
+export function Dashboard({ initialSymbols = [], enableResearchRecords = false }: { initialSymbols?: string[]; enableResearchRecords?: boolean }) {
+  const { privateStorage, language, t } = useApp();
   const router = useRouter();
   const params = useSearchParams();
   const initialSymbolKey = initialSymbols.join(",");
@@ -95,6 +82,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   const pendingForecasts = useRef(new Set<string>());
   const loadedForecasts = useRef(new Set<string>());
   const pendingReturns = useRef(new Set<string>());
+  const loadedRecentReturns = useRef(new Set<string>());
   const loadedFullReturns = useRef(new Set<string>());
   const pendingFullHistories = useRef(new Set<string>());
   const loadedFullHistories = useRef(new Set<string>());
@@ -109,10 +97,10 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   const updateSymbols = useCallback((next: string[], preferredActive?: string) => {
     const nextActive = preferredActive && next.includes(preferredActive) ? preferredActive : next.includes(active) ? active : next[0] || "";
     setActive(nextActive);
-    saveComparisonDraft(localStorage, next);
-    if (nextActive) rememberRecentSymbol(localStorage, nextActive);
+    saveComparisonDraft(privateStorage, next);
+    if (nextActive) rememberRecentSymbol(privateStorage, nextActive);
     router.replace(dashboardDestination(next, { ...viewState, active: nextActive, isolated: next.includes(isolatedSymbol || "") ? isolatedSymbol : null }), { scroll: false });
-  }, [active, isolatedSymbol, router, viewState]);
+  }, [active, isolatedSymbol, privateStorage, router, viewState]);
 
   const updateView = useCallback((patch: Partial<DashboardViewState>) => {
     const next = { ...viewState, ...patch };
@@ -163,9 +151,9 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   useEffect(() => {
     if (!active || viewed.current.has(active)) return;
     viewed.current.add(active);
-    rememberRecentSymbol(localStorage, active);
+    rememberRecentSymbol(privateStorage, active);
     trackEvent("asset_view");
-  }, [active]);
+  }, [active, privateStorage]);
 
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
@@ -183,7 +171,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
         setSeries([item]);
         setCompareErrors([]);
         setPeriodReturns((current) => {
-          const recent = periodReturnsFromHistory(history);
+          const recent = periodReturnsFromHistory(history, recentRangesWithin(loadStart));
           return { ...current, [asset.symbol]: mergePeriodReturns(current[asset.symbol], recent) };
         });
         setBundles((current) => ({
@@ -222,7 +210,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
             data_as_of: item.data_as_of,
             snapshot: item.snapshot || {},
             records: item.points.map((point) => ({ Date: point.date, Price: point.price })),
-          });
+          }, recentRangesWithin(loadStart));
           next[item.symbol] = mergePeriodReturns(current[item.symbol], recent);
         });
         return next;
@@ -320,12 +308,13 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
   const loadReturns = useCallback(async (symbol: string, scope: "recent" | "full") => {
     const key = `${symbol}:${scope}`;
     if (pendingReturns.current.has(key)) return;
-    if (scope === "recent" && periodReturns[symbol]) return;
+    if (scope === "recent" && (loadedRecentReturns.current.has(symbol) || RECENT_RETURN_RANGES.every((range) => periodReturns[symbol]?.returns && range in periodReturns[symbol].returns))) return;
     if (scope === "full" && periodReturns[symbol]?.long_term_complete) return;
     pendingReturns.current.add(key);
     try {
       const data = await getPeriodReturns(symbol, scope);
-      setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], data) }));
+      if (scope === "recent") loadedRecentReturns.current.add(symbol);
+      setPeriodReturns((current) => ({ ...current, [symbol]: fillMissingPeriodReturns(current[symbol], data) }));
     } catch {
       // The chart and forecast remain usable when long-range returns are unavailable.
     } finally {
@@ -340,7 +329,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
     try {
       const data = await getPeriodReturns(symbol, "full");
       if (data.long_term_complete) loadedFullReturns.current.add(symbol);
-      setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], data) }));
+      setPeriodReturns((current) => ({ ...current, [symbol]: fillMissingPeriodReturns(current[symbol], data) }));
     } catch {
       // A previously cached full history can still be used on a later visit.
     } finally {
@@ -369,7 +358,9 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
             loadedFullReturns.current.add(symbol);
             setFullSeries((current) => ({ ...current, [symbol]: compareSeriesFromHistory(snapshot.history!) }));
             setFullHistoryErrors((current) => { const next = { ...current }; delete next[symbol]; return next; });
-            const completeReturns = periodReturnsFromHistory(snapshot.history, true);
+            // Full-history requests can come back as monthly bars, so only long ranges
+            // come from them; short ranges stay on daily data, as in /api/market/returns.
+            const completeReturns = periodReturnsFromHistory(snapshot.history, LONG_HISTORY_RANGES, true);
             setPeriodReturns((current) => ({ ...current, [symbol]: mergePeriodReturns(current[symbol], completeReturns) }));
           });
           pending.filter((asset) => !returned.has(asset.symbol)).forEach((asset) => {
@@ -415,6 +406,7 @@ export function Dashboard({ initialSymbols = [] }: { initialSymbols?: string[] }
           updateSymbols(result.symbols, optimistic.symbol);
         }
       }} onOpen={(asset) => router.push(assetPath(asset.symbol))} onAlert={(asset) => router.push(`/favorites/?alert=${encodeURIComponent(asset.symbol)}`)} onRemove={(symbol) => { setLimitReached(false); updateSymbols(removeSymbol(symbols, symbol)); }} onClear={() => updateSymbols([])} />
+      {enableResearchRecords && <SingleAssetResearchEntry symbols={symbols} assets={assets} active={active} history={bundles[active]?.history || bundles[active]?.summary} forecast={bundles[active]?.forecast} />}
       <section className="control-row">
         <label className="switch-label">{normalized ? t("normalized") : t("actual")}<button className={`switch ${normalized ? "on" : ""}`} onClick={() => { const next = !normalized; setNormalized(next); updateView({ normalized: next }); }} aria-pressed={normalized}><i /></button></label>
       </section>

@@ -10,7 +10,8 @@ export function ResearchNavigation() {
   const pathname = usePathname();
   const zh = language === "zh";
   const items = [
-    { href: "/favorites/", label: zh ? "观察列表" : "Watchlist", detail: zh ? "收藏与变化" : "Saved assets", icon: Bookmark },
+    { href: "/favorites/#research-records", label: zh ? "研究记录" : "Research records", detail: zh ? "判断与历史" : "Judgments and history", icon: Bookmark },
+    { href: "/favorites/", label: zh ? "我的研究" : "My research", detail: zh ? "关注与复核" : "Watchlist and reviews", icon: Bookmark },
     { href: "/portfolio/", label: zh ? "持仓组合" : "Portfolio", detail: zh ? "成本与盈亏" : "Cost and P/L", icon: BriefcaseBusiness },
     { href: "/favorites/#alerts", label: zh ? "提醒" : "Alerts", detail: zh ? "价格与预测" : "Price and forecast", icon: Bell },
     { href: "/screener/", label: zh ? "筛选条件" : "Saved screens", detail: zh ? "发现新候选" : "Discover candidates", icon: ListFilter },

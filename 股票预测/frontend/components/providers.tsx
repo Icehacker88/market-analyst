@@ -1,13 +1,16 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getUserState, resolveAssets, saveUserStatePatch } from "@/lib/api";
 import { messages, type Language, type MessageKey } from "@/lib/i18n";
 import { canonicalizeAsset } from "@/lib/assets";
 import { observeWebVitals, trackEvent } from "@/lib/analytics";
 import { listQueuedStatePatches, queueStatePatch, removeQueuedStatePatch } from "@/lib/offline-store";
-import { DEFAULT_USER_STATE, hasStatePatch, normalizeUserState, statePatch } from "@/lib/user-state";
-import type { Asset, UserState } from "@/lib/types";
+import { DEFAULT_USER_STATE, applyUserStatePatch, hasStatePatch, normalizeUserState, statePatch } from "@/lib/user-state";
+import { createPrivateStorage, privateScope, type PrivateStorage } from "@/lib/private-storage";
+import { appendReviewEvent } from "@/lib/research-record-review";
+import { upsertResearchRecord } from "@/lib/research-record";
+import type { Asset, ResearchRecord, ResearchReviewEvent, UserState } from "@/lib/types";
 import { AuthProvider, useAuth } from "./auth-provider";
 import { PwaRuntime } from "./pwa-runtime";
 
@@ -22,13 +25,17 @@ type AppContextValue = {
   isFavorite: (symbol: string) => boolean;
   userState: UserState;
   updateUserState: (update: (current: UserState) => UserState) => void;
+  saveResearchRecord: (record: ResearchRecord) => Promise<"saved" | "failed">;
+  saveResearchReview: (event: ResearchReviewEvent) => Promise<"saved" | "failed">;
   cloudSyncing: boolean;
+  privateStorage: PrivateStorage;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-function AppStateProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+function AppStateProvider({ children, userId, pending }: { children: React.ReactNode; userId: string | null; pending: boolean }) {
+  const lifecycle = useRef({ active: true, controller: new AbortController() });
+  const privateStorage = useMemo(() => createPrivateStorage(pending ? null : privateScope(userId), () => lifecycle.current.active), [pending, userId]);
   const [language, setLanguage] = useState<Language>("zh");
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [favorites, setFavorites] = useState<Asset[]>([]);
@@ -39,63 +46,136 @@ function AppStateProvider({ children }: { children: React.ReactNode }) {
   const syncedState = useRef<UserState>(DEFAULT_USER_STATE);
   const latestState = useRef<UserState>(DEFAULT_USER_STATE);
   const syncRunning = useRef(false);
+  const sync = useRef<() => Promise<void>>(async () => undefined);
   const seenNotification = useRef<string | null>(null);
 
   useEffect(() => observeWebVitals(), []);
 
+  useLayoutEffect(() => {
+    lifecycle.current.active = true;
+    if (lifecycle.current.controller.signal.aborted) lifecycle.current.controller = new AbortController();
+    return () => {
+      lifecycle.current.active = false;
+      lifecycle.current.controller.abort();
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      const patch = statePatch(syncedState.current, latestState.current);
+      if (userId && cloudReady.current && hasStatePatch(patch)) void queueStatePatch(userId, patch);
+      cloudReady.current = false;
+    };
+  }, [userId]);
+
   useEffect(() => {
     const storedLanguage = (localStorage.getItem("orivane-language") || localStorage.getItem("signalview-language")) as Language | null;
     const storedTheme = (localStorage.getItem("orivane-theme") || localStorage.getItem("signalview-theme")) as "light" | "dark" | null;
-    const storedFavorites = localStorage.getItem("orivane-favorites") || localStorage.getItem("signalview-favorites");
-    const storedState = localStorage.getItem("orivane-user-state");
     if (storedLanguage && messages[storedLanguage]) setLanguage(storedLanguage);
     if (storedTheme) setTheme(storedTheme);
-    if (storedFavorites) {
-      try {
-        const parsed = (JSON.parse(storedFavorites) as Asset[]).map(canonicalizeAsset);
-        setFavorites([...new Map(parsed.map((asset) => [asset.symbol, asset])).values()]);
-      } catch { setFavorites([]); }
-    }
-    if (storedState) {
-      try {
-        const next = normalizeUserState(JSON.parse(storedState));
-        latestState.current = next;
-        setUserState(next);
-      } catch { setUserState(DEFAULT_USER_STATE); }
-    }
-  }, []);
+    let initial = normalizeUserState();
+    try { initial = normalizeUserState(JSON.parse(privateStorage.getItem("orivane-user-state") || "null")); } catch { /* Start empty. */ }
+    latestState.current = initial;
+    syncedState.current = initial;
+    setUserState(initial);
+    try {
+      const stored = JSON.parse(privateStorage.getItem("orivane-favorites") || "[]") as Asset[];
+      setFavorites([...new Map(stored.map(canonicalizeAsset).map((asset) => [asset.symbol, asset])).values()]);
+    } catch { setFavorites([]); }
+    if (!userId || pending) return;
 
-  useEffect(() => { latestState.current = userState; }, [userState]);
-
-  useEffect(() => {
-    cloudReady.current = false;
-    if (!user) return;
-    setCloudSyncing(true);
-    getUserState().then(async (remote) => {
-      const storedAssets = (() => { try { return JSON.parse(localStorage.getItem("orivane-favorites") || "[]") as Asset[]; } catch { return []; } })();
-      const localSymbols = storedAssets.map((asset) => asset.symbol);
-      const remoteSymbols = remote.watchlists?.flatMap((list) => list.symbols) || [];
-      const normalized = normalizeUserState(remote);
-      if (!remoteSymbols.length && localSymbols.length) {
-        normalized.watchlists = normalized.watchlists.length ? normalized.watchlists.map((list, index) => index === 0 ? { ...list, symbols: localSymbols } : list) : [{ ...DEFAULT_USER_STATE.watchlists[0], symbols: localSymbols }];
-        const saved = await saveUserStatePatch({ watchlists: normalized.watchlists }).catch(() => null);
-        if (saved) Object.assign(normalized, normalizeUserState(saved));
+    const controller = lifecycle.current.controller;
+    let disposed = false;
+    let initializing = false;
+    const active = () => !disposed && lifecycle.current.active && !controller.signal.aborted;
+    const options = { expectedUserId: userId, signal: controller.signal };
+    const display = async (state: UserState) => {
+      if (!active()) return;
+      latestState.current = state;
+      setUserState(state);
+      privateStorage.setItem("orivane-user-state", JSON.stringify(state));
+      const symbols = [...new Set(state.watchlists.flatMap((list) => list.symbols))];
+      const assets = symbols.length ? await resolveAssets(symbols).catch(() => []) : [];
+      if (!active() || latestState.current !== state) return;
+      setFavorites(assets.map(canonicalizeAsset));
+      privateStorage.setItem("orivane-favorites", JSON.stringify(assets));
+    };
+    const flush = async () => {
+      if (!active() || !cloudReady.current || syncRunning.current || !navigator.onLine) return;
+      syncRunning.current = true;
+      setCloudSyncing(true);
+      let succeeded = false;
+      try {
+        const queued = await listQueuedStatePatches(userId);
+        if (!active()) return;
+        for (const item of queued) {
+          if (!active()) return;
+          const queuedPatch = { ...item.patch,
+            ...(item.patch.research_records ? { research_records: { ...syncedState.current.research_records, ...item.patch.research_records } } : {}),
+            ...(item.patch.research_review_events ? { research_review_events: { ...item.patch.research_review_events, ...syncedState.current.research_review_events } } : {}),
+          };
+          const saved = await saveUserStatePatch(queuedPatch, options);
+          if (!active()) return;
+          syncedState.current = normalizeUserState(saved);
+          await removeQueuedStatePatch(userId, item.id);
+          if (!active()) return;
+        }
+        const candidate = latestState.current;
+        const patch = statePatch(syncedState.current, candidate);
+        if (hasStatePatch(patch)) {
+          const saved = normalizeUserState(await saveUserStatePatch(patch, options));
+          if (!active()) return;
+          const pendingPatch = statePatch(candidate, latestState.current);
+          syncedState.current = saved;
+          await display(applyUserStatePatch(saved, pendingPatch));
+          if (!active()) return;
+        }
+        succeeded = true;
+      } catch {
+        if (active()) {
+          const patch = statePatch(syncedState.current, latestState.current);
+          if (hasStatePatch(patch)) await queueStatePatch(userId, patch);
+        }
+      } finally {
+        if (active()) {
+          syncRunning.current = false;
+          setCloudSyncing(false);
+          if (succeeded && hasStatePatch(statePatch(syncedState.current, latestState.current))) {
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+            saveTimer.current = setTimeout(() => { if (active()) void flush(); }, 250);
+          }
+        }
       }
-      syncedState.current = normalized;
-      latestState.current = normalized;
-      setUserState(normalized);
-      const symbols = [...new Set(normalized.watchlists.flatMap((list) => list.symbols))];
-      if (symbols.length) {
-        const assets = await resolveAssets(symbols).catch(() => []);
-        setFavorites(assets.map(canonicalizeAsset));
-        localStorage.setItem("orivane-favorites", JSON.stringify(assets));
+    };
+    const initialize = async () => {
+      if (!active() || initializing) return;
+      if (cloudReady.current) return flush();
+      initializing = true;
+      setCloudSyncing(true);
+      const beforeLoad = latestState.current;
+      try {
+        const remote = normalizeUserState(await getUserState(options));
+        if (!active()) return;
+        const queued = await listQueuedStatePatches(userId);
+        if (!active()) return;
+        let next = queued.reduce((state, item) => applyUserStatePatch(state, item.patch), remote);
+        next = applyUserStatePatch(next, statePatch(beforeLoad, latestState.current));
+        syncedState.current = remote;
+        cloudReady.current = true;
+        await display(next);
+        if (active()) await flush();
+      } catch { /* Retry on the next online event; never sync an unverified state. */ }
+      finally {
+        initializing = false;
+        if (active()) setCloudSyncing(false);
       }
-      cloudReady.current = true;
-    }).catch(() => undefined).finally(() => {
-      cloudReady.current = true;
-      setCloudSyncing(false);
-    });
-  }, [user]);
+    };
+    sync.current = initialize;
+    void initialize();
+    const online = () => { void initialize(); };
+    window.addEventListener("online", online);
+    return () => {
+      disposed = true;
+      window.removeEventListener("online", online);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [pending, privateStorage, userId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -104,57 +184,13 @@ function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
 
-  const performCloudSync = useCallback(async (candidate: UserState) => {
-    if (!user || !cloudReady.current || syncRunning.current) return;
-    const patch = statePatch(syncedState.current, candidate);
-    if (!hasStatePatch(patch)) return;
-    syncRunning.current = true;
-    setCloudSyncing(true);
-    try {
-      const saved = normalizeUserState(await saveUserStatePatch(patch));
-      syncedState.current = saved;
-      const pending = statePatch(saved, latestState.current);
-      if (!hasStatePatch(pending)) {
-        latestState.current = saved;
-        setUserState(saved);
-        localStorage.setItem("orivane-user-state", JSON.stringify(saved));
-      }
-    } catch {
-      await queueStatePatch(patch);
-    } finally {
-      syncRunning.current = false;
-      setCloudSyncing(false);
-      if (hasStatePatch(statePatch(syncedState.current, latestState.current))) {
-        if (saveTimer.current) clearTimeout(saveTimer.current);
-        saveTimer.current = setTimeout(() => { void performCloudSync(latestState.current); }, 250);
-      }
-    }
-  }, [user]);
-
-  const scheduleCloudSync = useCallback((next: UserState) => {
-    if (!user || !cloudReady.current) return;
+  const scheduleCloudSync = useCallback(() => {
+    if (!userId || pending || !lifecycle.current.active || !cloudReady.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { void performCloudSync(next); }, 500);
-  }, [performCloudSync, user]);
-
-  useEffect(() => {
-    if (!user) return;
-    const flush = async () => {
-      if (!navigator.onLine) return;
-      const queued = await listQueuedStatePatches();
-      for (const item of queued) {
-        try {
-          const saved = normalizeUserState(await saveUserStatePatch(item.patch));
-          syncedState.current = saved;
-          await removeQueuedStatePatch(item.id);
-        } catch { break; }
-      }
-      void performCloudSync(latestState.current);
-    };
-    void flush();
-    window.addEventListener("online", flush);
-    return () => window.removeEventListener("online", flush);
-  }, [performCloudSync, user]);
+    saveTimer.current = setTimeout(() => {
+      if (lifecycle.current.active) void sync.current();
+    }, 500);
+  }, [pending, userId]);
 
   useEffect(() => {
     const newest = userState.alert_history?.find((item) => !item.read_at);
@@ -165,39 +201,84 @@ function AppStateProvider({ children }: { children: React.ReactNode }) {
     const title = newest.title || `${newest.symbol} ${language === "zh" ? "提醒" : "alert"}`;
     const body = newest.body || `${language === "zh" ? "价格" : "Price"} ${newest.price}`;
     if (navigator.serviceWorker) {
-      void navigator.serviceWorker.ready.then((registration) => registration.showNotification(title, {
+      void navigator.serviceWorker.ready.then((registration) => {
+        if (!lifecycle.current.active) return;
+        return registration.showNotification(title, {
         body,
         icon: "/icon.svg",
         tag: newest.id,
         data: { url: newest.deep_link || `/stocks/${newest.symbol.toLowerCase().replaceAll(".", "-")}/` },
-      })).catch(() => undefined);
+        });
+      }).catch(() => undefined);
     }
   }, [language, userState.alert_history, userState.notification_preferences]);
 
   const persistState = useCallback((next: UserState) => {
+    if (!lifecycle.current.active || pending) return;
     const normalized = normalizeUserState(next);
+    const patch = statePatch(latestState.current, normalized);
     latestState.current = normalized;
     setUserState(normalized);
-    localStorage.setItem("orivane-user-state", JSON.stringify(normalized));
-    scheduleCloudSync(normalized);
-  }, [scheduleCloudSync]);
+    privateStorage.setItem("orivane-user-state", JSON.stringify(normalized));
+    // Preserve explicit edits even if the initial cloud read is offline or still pending.
+    if (userId && !cloudReady.current && hasStatePatch(patch)) void queueStatePatch(userId, patch);
+    scheduleCloudSync();
+  }, [pending, privateStorage, scheduleCloudSync, userId]);
 
   const updateUserState = useCallback((update: (current: UserState) => UserState) => {
-    setUserState((current) => {
-      const next = normalizeUserState(update(current));
-      latestState.current = next;
-      localStorage.setItem("orivane-user-state", JSON.stringify(next));
-      scheduleCloudSync(next);
-      return next;
-    });
-  }, [scheduleCloudSync]);
+    if (!lifecycle.current.active || pending) return;
+    persistState(update(latestState.current));
+  }, [pending, persistState]);
+
+  const saveResearchRecord = useCallback(async (record: ResearchRecord): Promise<"saved" | "failed"> => {
+    if (!lifecycle.current.active || pending) return "failed";
+    try {
+      const next = normalizeUserState(upsertResearchRecord(latestState.current, record));
+      const serialized = JSON.stringify(next);
+      privateStorage.setItem("orivane-user-state", serialized);
+      // Private storage is best-effort; never report a durable save without a read-back.
+      if (privateStorage.getItem("orivane-user-state") !== serialized) return "failed";
+      if (userId) {
+        const item = await queueStatePatch(userId, { research_records: next.research_records });
+        const queued = await listQueuedStatePatches(userId);
+        if (!lifecycle.current.active) return "failed";
+        if (!queued.some((entry) => entry.id === item.id)) return "failed";
+      }
+      if (!lifecycle.current.active) return "failed";
+      // Merge only records so unrelated edits during queue persistence are retained.
+      persistState(upsertResearchRecord(latestState.current, record));
+      return "saved";
+    } catch { return "failed"; }
+  }, [pending, persistState, privateStorage, userId]);
+
+  const reviewSaving = useRef(false);
+  const saveResearchReview = useCallback(async (event: ResearchReviewEvent): Promise<"saved" | "failed"> => {
+    if (!lifecycle.current.active || pending || reviewSaving.current) return "failed";
+    reviewSaving.current = true;
+    try {
+      const next = normalizeUserState(appendReviewEvent(latestState.current, event));
+      const serialized = JSON.stringify(next);
+      privateStorage.setItem("orivane-user-state", serialized);
+      if (privateStorage.getItem("orivane-user-state") !== serialized) return "failed";
+      if (userId) {
+        const item = await queueStatePatch(userId, { research_review_events: next.research_review_events });
+        const queued = await listQueuedStatePatches(userId);
+        if (!lifecycle.current.active || !queued.some(entry => entry.id === item.id)) return "failed";
+      }
+      if (!lifecycle.current.active) return "failed";
+      persistState(appendReviewEvent(latestState.current, event));
+      return "saved";
+    } catch { return "failed"; }
+    finally { reviewSaving.current = false; }
+  }, [pending, persistState, privateStorage, userId]);
 
   const toggleFavorite = useCallback((asset: Asset) => {
+    if (!lifecycle.current.active || pending) return;
     const exists = favorites.some((item) => item.symbol === asset.symbol);
     trackEvent(exists ? "favorite_remove" : "favorite_add");
     const next = exists ? favorites.filter((item) => item.symbol !== asset.symbol) : [...favorites, asset];
     setFavorites(next);
-    localStorage.setItem("orivane-favorites", JSON.stringify(next));
+    privateStorage.setItem("orivane-favorites", JSON.stringify(next));
     const lists = userState.watchlists.length ? userState.watchlists : DEFAULT_USER_STATE.watchlists;
     persistState({
       ...userState,
@@ -205,7 +286,7 @@ function AppStateProvider({ children }: { children: React.ReactNode }) {
         ...list, symbols: exists ? list.symbols.filter((symbol) => symbol !== asset.symbol) : [...new Set([...list.symbols, asset.symbol])],
       } : list),
     });
-  }, [favorites, persistState, userState]);
+  }, [favorites, pending, persistState, privateStorage, userState]);
 
   const value = useMemo<AppContextValue>(() => ({
     language,
@@ -224,13 +305,23 @@ function AppStateProvider({ children }: { children: React.ReactNode }) {
     userState,
     updateUserState,
     cloudSyncing,
-  }), [cloudSyncing, favorites, language, theme, toggleFavorite, updateUserState, userState]);
+    saveResearchRecord,
+    saveResearchReview,
+    privateStorage,
+  }), [cloudSyncing, favorites, language, privateStorage, saveResearchRecord, saveResearchReview, theme, toggleFavorite, updateUserState, userState]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
+export function AuthScopedState({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  const userId = loading ? null : user?.id || null;
+  const scope = loading ? "pending" : privateScope(userId);
+  return <AppStateProvider key={scope} userId={userId} pending={loading}><PwaRuntime />{children}</AppStateProvider>;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AuthProvider><AppStateProvider><PwaRuntime />{children}</AppStateProvider></AuthProvider>;
+  return <AuthProvider><AuthScopedState>{children}</AuthScopedState></AuthProvider>;
 }
 
 export function useApp() {

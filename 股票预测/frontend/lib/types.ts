@@ -221,6 +221,46 @@ export type ResearchReview = {
   trigger_price?: number | null;
   data_as_of?: string | null;
 };
+export type ResearchJudgment = { direction: "bullish" | "bearish" | "neutral"; reason: string; risks: string; invalidation: string | null; review_date: string | null };
+export type ResearchReviewEvent = {
+  version: 1; id: string; record_id: string; parent_event_id: string | null; reviewed_at: string;
+  outcome: "maintain" | "adjust" | "archive"; direction: ResearchJudgment["direction"];
+  reason: string; risk_changes: string; next_review_date: string | null;
+  current_snapshot: ResearchRecord["snapshot"];
+  data_status: string; client_received_at: string | null;
+};
+export type ResearchRecord = {
+  /** Present only on newly saved records; legacy initial versions are not inferred. */
+  initial_judgment?: ResearchJudgment;
+  version: 1;
+  id: string;
+  symbol: string;
+  asset_name: string;
+  currency: string | null;
+  direction: "bullish" | "bearish" | "neutral";
+  reason: string;
+  risks: string;
+  invalidation: string | null;
+  /** User-selected calendar date; not an automatic trigger or review-plan replacement. */
+  review_date: string | null;
+  created_at: string;
+  updated_at: string;
+  snapshot: {
+    reference_price: number | null;
+    market_data_as_of: string | null;
+    forecast: {
+      signal: "Up" | "Down" | "Observe" | null;
+      return_1d: number | null;
+      return_5d: number | null;
+      return_1m: number | null;
+      data_as_of: string | null;
+      generated_at: string | null;
+      model: string | null;
+      model_version: string | null;
+      optimization_version: string | null;
+    } | null;
+  };
+};
 export type NotificationPreferences = {
   email_enabled: boolean;
   browser_enabled: boolean;
@@ -248,6 +288,8 @@ export type UserState = {
   forecast_snapshots?: Record<string, { signal: string; confidence: number | null; invalidation: number | null; data_as_of: string; price?: number | null }>;
   decision_profiles?: Record<string, DecisionProfile>;
   research_reviews?: Record<string, ResearchReview>;
+  research_records?: Record<string, ResearchRecord>;
+  research_review_events?: Record<string, ResearchReviewEvent>;
   research_preferences?: {
     market: "global" | "us" | "a" | "hk";
     goal: "opportunity" | "risk" | "learn";
@@ -258,6 +300,7 @@ export type UserState = {
 };
 
 export type AuthUser = {
+  is_admin?: boolean;
   id: string;
   email: string;
   name?: string;
@@ -309,11 +352,30 @@ export type History = {
   records: HistoryRecord[];
 };
 
+/** Source age is independent of the browser response-cache age. */
+export type ReadOnlySnapshotSource = {
+  source: "history_cache" | "frozen_forecast";
+  status: "available" | "stale" | "unavailable" | "failed";
+  data_as_of: string | null;
+  stored_at: string | null;
+  generated_at: string | null;
+  expires_at: number | null;
+  reason?: string;
+};
+export type ReadOnlySnapshotMetadata = {
+  version: 1;
+  queried_at: string;
+  query_status: "complete" | "failed";
+  history: ReadOnlySnapshotSource;
+  forecast: ReadOnlySnapshotSource;
+};
+
 export type MarketSnapshot = {
   asset: Asset;
   history?: History;
   forecast?: Forecast;
-  errors: Array<{ kind: "history" | "forecast" | "asset"; message: string }>;
+  errors: Array<{ kind: "history" | "forecast" | "asset"; message: string; code?: string }>;
+  read_only?: ReadOnlySnapshotMetadata;
 };
 
 export type CompareSeries = {

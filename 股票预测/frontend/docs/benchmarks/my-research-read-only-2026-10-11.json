@@ -1,0 +1,288 @@
+{
+  "runtime": "Miniflare 4.20260630.0 / local workerd",
+  "node": "v26.0.0",
+  "capturedAt": "2026-10-10T18:59:53.422Z",
+  "synthetic": true,
+  "historyRecordsPerAsset": 1250,
+  "historyBytesPerAsset": 585600,
+  "serverResponseCache": false,
+  "cold": {
+    "count": 5,
+    "batchSize": 2,
+    "requestCount": 3,
+    "maximumConcurrency": 2,
+    "checked": 5,
+    "firstBatchMs": 9.125625000000014,
+    "totalMs": 13.742834000000016,
+    "requestMedianMs": 8.997874999999908,
+    "requestP95Ms": 11.051750000000084,
+    "responseBytes": 4645
+  },
+  "scenarios": [
+    {
+      "count": 5,
+      "samples": [
+        {
+          "count": 5,
+          "batchSize": 2,
+          "requestCount": 3,
+          "maximumConcurrency": 2,
+          "checked": 5,
+          "firstBatchMs": 3.6079580000000533,
+          "totalMs": 8.87179100000003,
+          "requestMedianMs": 5.229000000000042,
+          "requestP95Ms": 6.948124999999891,
+          "responseBytes": 4645
+        },
+        {
+          "count": 5,
+          "batchSize": 2,
+          "requestCount": 3,
+          "maximumConcurrency": 2,
+          "checked": 5,
+          "firstBatchMs": 3.7373340000000326,
+          "totalMs": 8.352917000000048,
+          "requestMedianMs": 4.601417000000083,
+          "requestP95Ms": 6.736167000000023,
+          "responseBytes": 4645
+        },
+        {
+          "count": 5,
+          "batchSize": 2,
+          "requestCount": 3,
+          "maximumConcurrency": 2,
+          "checked": 5,
+          "firstBatchMs": 3.589166999999975,
+          "totalMs": 8.25791700000002,
+          "requestMedianMs": 4.656166999999982,
+          "requestP95Ms": 6.758290999999986,
+          "responseBytes": 4645
+        },
+        {
+          "count": 5,
+          "batchSize": 2,
+          "requestCount": 3,
+          "maximumConcurrency": 2,
+          "checked": 5,
+          "firstBatchMs": 3.1612089999999853,
+          "totalMs": 7.23108400000001,
+          "requestMedianMs": 4.058208000000036,
+          "requestP95Ms": 5.751791000000026,
+          "responseBytes": 4645
+        },
+        {
+          "count": 5,
+          "batchSize": 2,
+          "requestCount": 3,
+          "maximumConcurrency": 2,
+          "checked": 5,
+          "firstBatchMs": 3.3025420000000167,
+          "totalMs": 8.217417000000069,
+          "requestMedianMs": 4.901124999999979,
+          "requestP95Ms": 6.526333000000022,
+          "responseBytes": 4645
+        }
+      ]
+    },
+    {
+      "count": 20,
+      "samples": [
+        {
+          "count": 20,
+          "batchSize": 2,
+          "requestCount": 10,
+          "maximumConcurrency": 2,
+          "checked": 20,
+          "firstBatchMs": 3.876957999999945,
+          "totalMs": 28.691374999999994,
+          "requestMedianMs": 5.4753749999999854,
+          "requestP95Ms": 6.7878749999999854,
+          "responseBytes": 18600
+        },
+        {
+          "count": 20,
+          "batchSize": 2,
+          "requestCount": 10,
+          "maximumConcurrency": 2,
+          "checked": 20,
+          "firstBatchMs": 3.2593329999999696,
+          "totalMs": 29.43795799999998,
+          "requestMedianMs": 5.84254199999998,
+          "requestP95Ms": 6.288708000000042,
+          "responseBytes": 18600
+        },
+        {
+          "count": 20,
+          "batchSize": 2,
+          "requestCount": 10,
+          "maximumConcurrency": 2,
+          "checked": 20,
+          "firstBatchMs": 3.3475420000000895,
+          "totalMs": 27.94933400000002,
+          "requestMedianMs": 5.452584000000115,
+          "requestP95Ms": 6.012541999999939,
+          "responseBytes": 18600
+        },
+        {
+          "count": 20,
+          "batchSize": 2,
+          "requestCount": 10,
+          "maximumConcurrency": 2,
+          "checked": 20,
+          "firstBatchMs": 3.1614580000000387,
+          "totalMs": 30.302208000000064,
+          "requestMedianMs": 5.665624999999864,
+          "requestP95Ms": 7.588250000000016,
+          "responseBytes": 18600
+        },
+        {
+          "count": 20,
+          "batchSize": 2,
+          "requestCount": 10,
+          "maximumConcurrency": 2,
+          "checked": 20,
+          "firstBatchMs": 3.3995840000000044,
+          "totalMs": 29.892417000000023,
+          "requestMedianMs": 6.020416999999952,
+          "requestP95Ms": 6.565667000000076,
+          "responseBytes": 18600
+        }
+      ]
+    },
+    {
+      "count": 50,
+      "samples": [
+        {
+          "count": 50,
+          "batchSize": 2,
+          "requestCount": 25,
+          "maximumConcurrency": 2,
+          "checked": 50,
+          "firstBatchMs": 3.881791000000021,
+          "totalMs": 75.46920799999998,
+          "requestMedianMs": 5.883542000000034,
+          "requestP95Ms": 6.724459000000024,
+          "responseBytes": 46560
+        },
+        {
+          "count": 50,
+          "batchSize": 2,
+          "requestCount": 25,
+          "maximumConcurrency": 2,
+          "checked": 50,
+          "firstBatchMs": 3.7381249999998545,
+          "totalMs": 77.70420799999988,
+          "requestMedianMs": 5.861540999999988,
+          "requestP95Ms": 9.506500000000187,
+          "responseBytes": 46560
+        },
+        {
+          "count": 50,
+          "batchSize": 2,
+          "requestCount": 25,
+          "maximumConcurrency": 2,
+          "checked": 50,
+          "firstBatchMs": 4.668292000000065,
+          "totalMs": 71.88408400000003,
+          "requestMedianMs": 5.528792000000067,
+          "requestP95Ms": 6.749332999999979,
+          "responseBytes": 46560
+        },
+        {
+          "count": 50,
+          "batchSize": 2,
+          "requestCount": 25,
+          "maximumConcurrency": 2,
+          "checked": 50,
+          "firstBatchMs": 3.141791999999896,
+          "totalMs": 68.18554199999994,
+          "requestMedianMs": 5.252833999999893,
+          "requestP95Ms": 5.985709000000043,
+          "responseBytes": 46560
+        },
+        {
+          "count": 50,
+          "batchSize": 2,
+          "requestCount": 25,
+          "maximumConcurrency": 2,
+          "checked": 50,
+          "firstBatchMs": 3.1850839999999607,
+          "totalMs": 70.65312500000005,
+          "requestMedianMs": 5.672459000000117,
+          "requestP95Ms": 6.32266699999991,
+          "responseBytes": 46560
+        }
+      ]
+    }
+  ],
+  "profile": {
+    "available": true,
+    "warning": "Local V8 sampling only, includes runtime/native work and profiler overhead; NOT hosted billed CPU or a per-request quota measurement.",
+    "samplingIntervalUs": 100,
+    "samples": 439,
+    "profiledRun": {
+      "count": 50,
+      "batchSize": 2,
+      "requestCount": 25,
+      "maximumConcurrency": 1,
+      "checked": 50,
+      "firstBatchMs": 5.03774999999996,
+      "totalMs": 90.70908299999996,
+      "requestMedianMs": 3.35087499999986,
+      "requestP95Ms": 5.012666999999965,
+      "responseBytes": 46560
+    },
+    "nonIdleSampleMs": 73.309,
+    "idleSampleMs": 44.833,
+    "topFunctions": [
+      {
+        "name": "(program)",
+        "sampledMs": 59.367
+      },
+      {
+        "name": "get",
+        "sampledMs": 2.357
+      },
+      {
+        "name": "(anonymous)",
+        "sampledMs": 1.988
+      },
+      {
+        "name": "createApi",
+        "sampledMs": 1.975
+      },
+      {
+        "name": "onRequest",
+        "sampledMs": 1.433
+      },
+      {
+        "name": "handle",
+        "sampledMs": 1.312
+      },
+      {
+        "name": "inferAsset",
+        "sampledMs": 1.304
+      },
+      {
+        "name": "Request",
+        "sampledMs": 0.798
+      },
+      {
+        "name": "route",
+        "sampledMs": 0.773
+      },
+      {
+        "name": "getStore",
+        "sampledMs": 0.691
+      },
+      {
+        "name": "(garbage collector)",
+        "sampledMs": 0.532
+      },
+      {
+        "name": "edgeResponse",
+        "sampledMs": 0.262
+      }
+    ]
+  }
+}
