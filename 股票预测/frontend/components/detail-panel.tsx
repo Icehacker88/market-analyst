@@ -7,7 +7,7 @@ import { runForecast, streamAiAnalysis, taskStatus } from "@/lib/api";
 import { compactChatThread, conversationForApi, createChatMessage, dedupeChatMessages } from "@/lib/ai-chat";
 import { displayAssetName } from "@/lib/assets";
 import { trackEvent } from "@/lib/analytics";
-import { forecastBrief } from "@/lib/forecast-brief";
+import { directionalLevels, forecastBrief } from "@/lib/forecast-brief";
 import { forecastCredibility, predictionScore } from "@/lib/forecast-credibility";
 import { forecastDecision } from "@/lib/forecast-decision";
 import { forecastPassport, type ForecastPassportState } from "@/lib/forecast-passport";
@@ -716,9 +716,10 @@ function personalizedDecisionAdvice(forecast: Forecast, history: History, score:
   const zh = language === "zh";
   const currentPrice = Number(history.snapshot.latest_price || forecast.base_price || 0);
   const expected = profile.horizon === "5D" ? Number(forecast.forecast_5d_return) : profile.horizon === "10D" ? Number(forecast.forecast_10d_return) : Number(forecast.forecast_1m_return);
-  const invalidation = Number(forecast.key_levels?.invalidation);
-  const support = Number(forecast.key_levels?.support);
-  const breakout = Number(forecast.key_levels?.breakout || forecast.key_levels?.resistance);
+  const levels = directionalLevels(forecast, currentPrice || null);
+  const downside = Number(levels.downside);
+  const support = Number(levels.support);
+  const upside = Number(levels.upside);
   const entry = Number(profile.entry_price);
   const pnl = Number.isFinite(entry) && entry > 0 && currentPrice > 0 ? currentPrice / entry - 1 : null;
   const liveSamples = Number(forecast.validation?.live.samples ?? 0);
@@ -730,7 +731,9 @@ function personalizedDecisionAdvice(forecast: Forecast, history: History, score:
   const bullish = Number.isFinite(expected) && expected > 0;
   const level = (value: number) => Number.isFinite(value) && value > 0 ? formatNumber(value) : "—";
   const horizon = profile.horizon === "5D" ? (zh ? "未来 5 日" : "the next 5 days") : profile.horizon === "10D" ? (zh ? "未来 10 日" : "the next 10 days") : (zh ? "未来 1 个月" : "the next month");
-  const riskAction = profile.risk === "conservative"
+  const riskAction = !validated
+    ? (zh ? "证据未达操作门槛，仅作条件观察" : "evidence is below the action threshold; treat this as conditions to watch")
+    : profile.risk === "conservative"
     ? (zh ? "先等待确认，单次风险敞口宜小" : "wait for confirmation and keep initial risk small")
     : profile.risk === "aggressive"
       ? (zh ? "可分批试仓，但必须预设失效退出条件" : "a staged probe is possible, but define an invalidation exit first")
@@ -740,23 +743,23 @@ function personalizedDecisionAdvice(forecast: Forecast, history: History, score:
     const pnlText = pnl === null ? (zh ? "未填写成本" : "entry price not provided") : `${zh ? "当前相对成本" : "current return vs entry"} ${formatPercent(pnl, true)}`;
     if (bullish && validated) return {
       title: zh ? "持有观察，确认后再加仓" : "Hold; add only after confirmation",
-      body: zh ? `${pnlText}。模型对${horizon}偏多；站稳突破位 ${level(breakout)} 后再考虑分批加仓，跌破失效位 ${level(invalidation)} 时优先减仓。` : `${pnlText}. The model is constructive for ${horizon}; consider staged adds only above ${level(breakout)}, and prioritize reducing risk below ${level(invalidation)}.`,
+      body: zh ? `${pnlText}。模型对${horizon}偏多；站稳 ${level(upside)} 后再考虑分批加仓，跌破 ${level(downside)} 时优先减仓。` : `${pnlText}. The model is constructive for ${horizon}; consider staged adds only above ${level(upside)}, and prioritize reducing risk below ${level(downside)}.`,
       guardrail: riskAction,
     };
     return {
       title: zh ? "优先保护仓位" : "Prioritize position protection",
-      body: zh ? `${pnlText}。当前${horizon}预测${bullish ? "略偏多但验证不足" : "偏弱"}；反弹未突破 ${level(breakout)} 前不宜追加强度，跌破 ${level(invalidation)} 时考虑分批降低敞口。` : `${pnlText}. The ${horizon} view is ${bullish ? "slightly positive but weakly validated" : "soft"}; avoid adding before ${level(breakout)} and consider staged risk reduction below ${level(invalidation)}.`,
+      body: zh ? `${pnlText}。当前${horizon}预测${bullish ? "略偏多但验证不足" : "偏弱"}；站上 ${level(upside)} 前不宜追加强度，跌破 ${level(downside)} 时重新评估仓位风险。` : `${pnlText}. The ${horizon} view is ${bullish ? "slightly positive but weakly validated" : "soft"}; avoid adding before ${level(upside)} and reassess position risk below ${level(downside)}.`,
       guardrail: riskAction,
     };
   }
   if (bullish && validated) return {
     title: zh ? "等待确认后分批入场" : "Stage entry after confirmation",
-    body: zh ? `模型对${horizon}偏多。可观察 ${level(support)} 附近承接，或放量突破 ${level(breakout)} 后分批入场；若随后跌破 ${level(invalidation)}，该判断失效。` : `The model is constructive for ${horizon}. Watch support near ${level(support)} or a confirmed break above ${level(breakout)} before staging an entry; the view fails below ${level(invalidation)}.`,
+    body: zh ? `模型对${horizon}偏多。可观察 ${level(support)} 附近承接，或放量突破 ${level(upside)} 后分批入场；若随后跌破 ${level(downside)}，该判断失效。` : `The model is constructive for ${horizon}. Watch support near ${level(support)} or a confirmed break above ${level(upside)} before staging an entry; the view fails below ${level(downside)}.`,
     guardrail: riskAction,
   };
   return {
     title: zh ? "继续等待，不追价" : "Wait; do not chase",
-    body: zh ? `当前${horizon}预测${bullish ? "偏多但历史优势不足" : "偏弱"}。等待价格在 ${level(support)} 获得支撑或有效突破 ${level(breakout)}，再重新评估。` : `The ${horizon} view is ${bullish ? "positive but not well validated" : "soft"}. Reassess after support near ${level(support)} holds or price confirms above ${level(breakout)}.`,
+    body: zh ? `当前${horizon}预测${bullish ? "偏多但历史优势不足" : "偏弱"}。等待价格在 ${level(support)} 获得支撑或有效站上 ${level(upside)}，再重新评估。` : `The ${horizon} view is ${bullish ? "positive but not well validated" : "soft"}. Reassess after support near ${level(support)} holds or price confirms above ${level(upside)}.`,
     guardrail: riskAction,
   };
 }

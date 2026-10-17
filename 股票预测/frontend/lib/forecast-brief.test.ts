@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forecastBrief } from "./forecast-brief";
+import { directionalLevels, forecastBrief } from "./forecast-brief";
 import type { Forecast } from "./types";
 
 function fixture(overrides: Partial<Forecast> = {}): Forecast {
@@ -25,10 +25,12 @@ describe("forecast brief", () => {
     expect(brief.newcomerAdvice).toContain("分批入场");
   });
 
-  it("does not recommend adding when the action is not actionable", () => {
-    const brief = forecastBrief(fixture({ action: { stance: "wait", actionable: false, evidence_status: "negative_edge", label_zh: "观察", label_en: "Watch", summary_zh: "", summary_en: "" } }), "zh");
-    expect(brief.holderAdvice).toContain("暂不加仓");
-    expect(brief.newcomerAdvice).toContain("等待");
+  it("only describes conditions when the action is not actionable", () => {
+    const brief = forecastBrief(fixture({ action: { stance: "hold", actionable: false, evidence_status: "negative_edge", label_zh: "观察", label_en: "Watch", summary_zh: "", summary_en: "" } }), "zh");
+    expect(brief.holderAdvice).toContain("不据此加仓或减仓");
+    expect(brief.holderAdvice).not.toMatch(/考虑减仓|分批加仓/);
+    expect(brief.newcomerAdvice).toContain("不构成入场依据");
+    expect(brief.newcomerAdvice).not.toContain("再入场");
   });
 
   it("does not present a holdout direction share from fewer than 20 samples", () => {
@@ -43,5 +45,31 @@ describe("forecast brief", () => {
     }), "zh");
     expect(brief.probability).toBeNull();
     expect(brief.probabilityNote).toBe("尚无足够历史样本");
+  });
+
+  // NVDA on 2026-10-16: a bearish "Observe" forecast whose invalidation sits above price.
+  const bearish = fixture({
+    signal: "Observe", base_price: 215.89, forecast_1d_return: -0.003, forecast_5d_return: -0.012, forecast_1m_return: -0.004,
+    action: { stance: "wait", actionable: false, evidence_status: "insufficient", label_zh: "仅作方向观察", label_en: "Directional watch only", summary_zh: "", summary_en: "" },
+    key_levels: { support: 215.89, resistance: 239.24, stop_loss: 207.95, breakout: 241.63, invalidation: 239.24, invalidation_zh: "", invalidation_en: "" },
+  });
+
+  it("puts a bearish invalidation above price and the downside level below it", () => {
+    expect(directionalLevels(bearish)).toEqual({ downside: 207.95, upside: 239.24, support: 215.89 });
+    const brief = forecastBrief(bearish, "zh");
+    expect(brief.holderAdvice).toContain("下方关注 207.95");
+    expect(brief.holderAdvice).not.toContain("跌破 239.24");
+    expect(`${brief.holderAdvice}${brief.newcomerAdvice}`).not.toContain("241.63");
+  });
+
+  it("keeps a bullish invalidation as the downside level", () => {
+    expect(directionalLevels(fixture({ base_price: 100 }))).toEqual({ downside: 92, upside: 105, support: 95 });
+    const hold = forecastBrief(fixture({ base_price: 100, action: { stance: "hold", actionable: true, evidence_status: "validated", label_zh: "", label_en: "", summary_zh: "", summary_en: "" } }), "zh");
+    expect(hold.holderAdvice).toContain("跌破 92 时考虑减仓");
+  });
+
+  it("uses the current price over the forecast base price when given", () => {
+    expect(directionalLevels(bearish, 240).upside).toBe(241.63);
+    expect(directionalLevels(bearish, 240).downside).toBe(239.24);
   });
 });
