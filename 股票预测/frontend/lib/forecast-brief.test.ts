@@ -72,4 +72,11 @@ describe("forecast brief", () => {
     expect(directionalLevels(bearish, 240).upside).toBe(241.63);
     expect(directionalLevels(bearish, 240).downside).toBe(239.24);
   });
+
+  it("falls back to the forecast base price when the current price is missing", () => {
+    const bullish = fixture({ base_price: 100 });
+    for (const missing of [null, undefined, "", 0, -5, Number.NaN]) {
+      expect(directionalLevels(bullish, missing)).toEqual({ downside: 92, upside: 105, support: 95 });
+    }
+  });
 });

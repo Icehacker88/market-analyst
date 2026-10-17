@@ -15,6 +15,12 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+// Missing prices arrive as null, "" or 0; Number() would turn them into a 0 reference.
+function positive(value: unknown): number | null {
+  const number = value === null || value === undefined || value === "" ? null : finite(value);
+  return number !== null && number > 0 ? number : null;
+}
+
 function percent(value: number): string {
   return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
 }
@@ -27,8 +33,8 @@ export type DirectionalLevels = { downside: number | null; upside: number | null
 
 // Key levels on the correct side of the current price. A bearish forecast's invalidation
 // sits above price, so it is the upside level to reclaim, never a "break below" trigger.
-export function directionalLevels(forecast: Forecast, currentPrice?: number | null): DirectionalLevels {
-  const reference = finite(currentPrice) ?? finite(forecast.base_price);
+export function directionalLevels(forecast: Forecast, currentPrice?: unknown): DirectionalLevels {
+  const reference = positive(currentPrice) ?? positive(forecast.base_price);
   const levels = forecast.key_levels;
   const invalidation = finite(levels?.invalidation);
   const below = (value: number | null) => value !== null && value > 0 && (reference === null || value < reference) ? value : null;
@@ -40,7 +46,8 @@ export function directionalLevels(forecast: Forecast, currentPrice?: number | nu
   };
 }
 
-export function forecastBrief(forecast: Forecast, language: "zh" | "en"): ForecastBrief {
+// Pass the page's `levels` so this brief and the tailored card name the same prices.
+export function forecastBrief(forecast: Forecast, language: "zh" | "en", levels: DirectionalLevels = directionalLevels(forecast)): ForecastBrief {
   const zh = language === "zh";
   const oneDay = finite(forecast.forecast_1d_return) ?? 0;
   const fiveDay = finite(forecast.forecast_5d_return) ?? 0;
@@ -74,7 +81,7 @@ export function forecastBrief(forecast: Forecast, language: "zh" | "en"): Foreca
   }
   if (probability !== null) probability = Math.max(0, Math.min(100, probability));
 
-  const { downside, upside, support } = directionalLevels(forecast);
+  const { downside, upside, support } = levels;
   const stance = forecast.action?.stance || "wait";
   const actionable = forecast.action?.actionable === true;
   const outlook = zh

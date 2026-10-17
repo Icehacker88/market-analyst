@@ -7,7 +7,7 @@ import { runForecast, streamAiAnalysis, taskStatus } from "@/lib/api";
 import { compactChatThread, conversationForApi, createChatMessage, dedupeChatMessages } from "@/lib/ai-chat";
 import { displayAssetName } from "@/lib/assets";
 import { trackEvent } from "@/lib/analytics";
-import { directionalLevels, forecastBrief } from "@/lib/forecast-brief";
+import { directionalLevels, forecastBrief, type DirectionalLevels } from "@/lib/forecast-brief";
 import { forecastCredibility, predictionScore } from "@/lib/forecast-credibility";
 import { forecastDecision } from "@/lib/forecast-decision";
 import { forecastPassport, type ForecastPassportState } from "@/lib/forecast-passport";
@@ -181,11 +181,13 @@ export function PredictionHero({ forecast, history, performance, stats, onOpenEv
   const calibration = forecast.calibration;
   const action = forecast.action;
   const validation = forecast.validation;
-  const brief = forecastBrief(forecast, language);
+  // One reference price for every advice block, so they cannot name opposite-side levels.
+  const levels = directionalLevels(forecast, history.snapshot.latest_price);
+  const brief = forecastBrief(forecast, language, levels);
   const passport = forecastPassport(forecast, history.data_as_of);
   const profile: DecisionProfile = userState.decision_profiles?.[forecast.symbol] || { status: "watching", horizon: "10D", risk: "balanced" };
   const savedReview = userState.research_reviews?.[forecast.symbol];
-  const tailored = personalizedDecisionAdvice(forecast, history, score.score, profile, language);
+  const tailored = personalizedDecisionAdvice(forecast, history, score.score, profile, language, levels);
   const updateProfile = (next: Partial<DecisionProfile>) => updateUserState((current) => ({
     ...current,
     decision_profiles: { ...(current.decision_profiles || {}), [forecast.symbol]: { ...profile, ...next } },
@@ -712,11 +714,10 @@ function evidenceLevel(stale: boolean, unverified: boolean, completed: number, l
   };
 }
 
-function personalizedDecisionAdvice(forecast: Forecast, history: History, score: number, profile: DecisionProfile, language: "zh" | "en") {
+function personalizedDecisionAdvice(forecast: Forecast, history: History, score: number, profile: DecisionProfile, language: "zh" | "en", levels: DirectionalLevels) {
   const zh = language === "zh";
   const currentPrice = Number(history.snapshot.latest_price || forecast.base_price || 0);
   const expected = profile.horizon === "5D" ? Number(forecast.forecast_5d_return) : profile.horizon === "10D" ? Number(forecast.forecast_10d_return) : Number(forecast.forecast_1m_return);
-  const levels = directionalLevels(forecast, currentPrice || null);
   const downside = Number(levels.downside);
   const support = Number(levels.support);
   const upside = Number(levels.upside);
