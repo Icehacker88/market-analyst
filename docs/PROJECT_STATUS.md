@@ -6,7 +6,7 @@
 
 | 用途 | GitHub 分支 / 提交 | 验证与发布状态 |
 | --- | --- | --- |
-| 稳定产品与后续 UI 基线 | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `934024859b9225e2465a5cc3170766a209ca7922`（2026-10-17 合并 PR #5 周期涨跌幅修复与 PR #8 logo 底纹修复，并已部署到 Production；此前 Preview 验收版本为 `aee719e`） | 首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；这些阶段冻结 |
+| 稳定产品与后续 UI 基线 | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `b41889b9dd7988bfba421ccc32ca8d9af47dfba1`（2026-10-17 依次合并 PR #5 周期涨跌幅、PR #8 logo 底纹、PR #10 建议价位修复，均已部署到 Production；此前 Preview 验收版本为 `aee719e`） | 首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；这些阶段冻结 |
 | Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1) · `75289a744e6533f0c3da3dd007a1656b5fc03dc1` | 基于上述产品提交，仅本地完成；346 项测试、typecheck、Cloudflare build、Pages 打包通过。未部署认证版本 |
 | 协作文档 | `codex/agent-collaboration-docs-20261015` · [PR #1](https://github.com/Icehacker88/market-analyst/pull/1) | 文档更新待审阅；此分支本身不包含最新产品源码 |
 | main | 本次读取为 `553438897d501a33c7e120009bffd36463c7962e` | 自动任务仍在写入预测账本；不等同于最新 Orivane 产品版本。本轮不覆盖或合并 |
@@ -40,6 +40,7 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
 - 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
 - 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
+- **Production 当前版本（2026-10-17 第二次发布，用户授权）**：部署 `0b78f7aa-46c1-4414-a8de-78c77099382d`，来源产品分支 `b41889b`（在 `9340248` 基础上加入 PR #10 建议价位修复，只改前端 4 个文件，配置未变）。**回滚目标**改为 `ee3eefb7-148c-4e86-80e1-49fa3e81bba4`（来源 `9340248`），操作方法同下；更早的 `2bf56aeb` 仍可作为第二回滚点。部署后检查：主要页面和接口均为 200；NVDA 的三块建议统一使用下方 207.95、上方 239.24；涨跌幅正常；logo 无占位图标；控制台无错误。PR #10、#11 按用户指示在 Codex 复核修订之前合并，修订内容尚未经 Codex 确认。
 - **Production 已于 2026-10-17 更新**（用户授权）：部署 `ee3eefb7-148c-4e86-80e1-49fa3e81bba4`，来源产品分支 `9340248`（干净工作树，`ORIVANE_SKIP_SEO_REFRESH=1 npm run build:cloudflare`，`wrangler pages deploy out --branch=main`；未部署 optimizer）。生产配置（wrangler.toml 顶层变量和 6 个 KV）与上次部署一致，Secrets 未改动。**回滚目标**：上一版 Production 部署 `2bf56aeb-0e72-4c19-8cb5-f4926cd25725`（来源 `a404860`，dirty 构建），在 Cloudflare Pages → Deployments 中选它，然后点 "Rollback to this deployment"。回滚不会丢用户数据：旧前端用 PATCH 保存，服务端会保留新版本写入的字段。部署后检查：主要页面和接口均为 200；NVDA 1D–1Y 涨跌幅与 `/api/market/returns` 一致；logo 无占位图标；手机首页不溢出；Kronos 端点行为与旧版一致；控制台无错误。已知差异：5Y/10Y/MAX 取自另一份缓存的全历史，与服务端结果可能相差约 1%，旧版同样如此。SEO 预测快照这次未刷新，沿用已提交版本。
 - 2026-10-15 上线审计发现 optimizer 35 个资产全部失败（503 与超时），同日 Kronos 上传 67 个结果；二者不同存储/生产路径，不能互相当作完整覆盖证明。这是昨日证据，本次没有触发生产任务或复测性能。
 - UI/认证分支含 Preview 隔离配置；文档分支旧源码没有同等配置。任何未来部署均须按所用源码分支重新核对六个 KV、凭据和 `ORIVANE_SKIP_SEO_REFRESH=1`。
