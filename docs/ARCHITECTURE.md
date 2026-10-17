@@ -1,6 +1,6 @@
 # Repository architecture and operational boundaries
 
-2026-10-16 handoff: the architecture below describes the older main baseline. Latest product/auth code is now available on the separate branches linked in [PROJECT_STATUS.md](PROJECT_STATUS.md); their Preview configuration and newer research features are not merged into this documentation branch.
+2026-10-17: the accepted product branch `codex/ui-preview-ff7fd40d` (b41889b) was merged into `main`, so `main` now carries the deployed Orivane frontend, its Preview isolation configuration and the newer research features. The authentication branch is still separate; see [PROJECT_STATUS.md](PROJECT_STATUS.md). Sections below dated 2026-10-15 describe the older baseline and are kept for history.
 
 Last reconciled: 2026-10-15. This document reflects the remote `main` snapshot `f28da7709353adbc716932af119ddd210dc1b400` and local read-only project materials dated through 2026-10-01. The user confirmed Cloudflare Pages as the current host on 2026-10-15. Verify live deployment revisions and Actions before any release decision.
 
@@ -28,7 +28,7 @@ The root Python pipeline, local FastAPI service, Cloudflare Worker API, and offi
 
 ### Branch-specific Preview caution
 
-In the inspected remote baseline, `wrangler.toml` has no `env.preview` section and `preview:cloudflare` does not select an isolated Preview environment. Separate local branches contain later isolation work, but that work is not included in this documentation branch. Inspect actual bindings and establish explicit Preview isolation before running Wrangler against remote resources. Historical reports cannot substitute for checking the current branch and target.
+Since the 2026-10-17 merge, `main`'s `wrangler.toml` has an `env.preview` section with six Preview KV bindings, and `preview:cloudflare` selects it with `ORIVANE_SKIP_SEO_REFRESH=1`. Inspect actual bindings and establish explicit Preview isolation before running Wrangler against remote resources. Historical reports cannot substitute for checking the current branch and target.
 
 ## Automation contracts to preserve
 

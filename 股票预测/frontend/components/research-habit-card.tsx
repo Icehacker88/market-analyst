@@ -11,15 +11,15 @@ import { AppLink as Link } from "./app-link";
 import { useApp } from "./providers";
 
 export function ResearchHabitCard({ recentAssets = [] }: { recentAssets?: Asset[] }) {
-  const { favorites, language, userState } = useApp();
+  const { privateStorage, favorites, language, userState } = useApp();
   const zh = language === "zh";
   const [stats, setStats] = useState({ visitDays: 0, completedReviews: 0 });
   const reviews = useMemo(() => Object.values(userState.research_reviews || {}), [userState.research_reviews]);
   const dueReviews = reviews.filter((review) => reviewIsDue(review));
 
   useEffect(() => {
-    const refresh = () => setStats(weeklyResearchStats(readResearchHabit(localStorage)));
-    recordResearchVisit(localStorage);
+    const refresh = () => setStats(weeklyResearchStats(readResearchHabit(privateStorage)));
+    recordResearchVisit(privateStorage);
     refresh();
     window.addEventListener("orivane-research-habit", refresh);
     window.addEventListener("storage", refresh);
@@ -27,7 +27,7 @@ export function ResearchHabitCard({ recentAssets = [] }: { recentAssets?: Asset[
       window.removeEventListener("orivane-research-habit", refresh);
       window.removeEventListener("storage", refresh);
     };
-  }, []);
+  }, [privateStorage]);
 
   const next = nextResearchAction({ favorites, recentAssets, reviews, dueReviews, visitDays: stats.visitDays, zh });
   const stepsCompleted = Number(favorites.length >= 3) + Number(reviews.length > 0) + Number(stats.visitDays >= 2);

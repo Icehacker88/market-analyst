@@ -41,114 +41,38 @@ type Context = {
 
 type PagesFunction<E = CloudflareEnv> = (context: { request: Request; env: E; waitUntil: (promise: Promise<unknown>) => void }) => Promise<Response> | Response;
 type CloudflareCache = { match: (request: Request) => Promise<Response | undefined>; put: (request: Request, response: Response) => Promise<void> };
-type CloudflareUser = { id: string; email?: string | null; name?: string; pictureUrl?: string | null; confirmedAt?: string };
-
-let ACTIVE_ENV: CloudflareEnv = {};
-let ACTIVE_REQUEST: Request | null = null;
-const MEMORY_KV = new Map<string, Map<string, string | ArrayBuffer>>();
-
-function envValue(name: string): string | undefined {
-  return ACTIVE_ENV[name as keyof CloudflareEnv] as string | undefined;
-}
-
-const process = {
-  env: new Proxy({}, {
-    get: (_target, property) => envValue(String(property)),
-  }) as Record<string, string | undefined>,
-};
-
-function memoryNamespace(name: string) {
-  if (!MEMORY_KV.has(name)) MEMORY_KV.set(name, new Map());
-  const store = MEMORY_KV.get(name)!;
-  return {
-    async get(key: string, options?: "text" | "json" | "arrayBuffer" | { type?: "text" | "json" | "arrayBuffer" }) {
-      const value = store.get(key);
-      if (value === undefined) return null;
-      const type = typeof options === "string" ? options : options?.type;
-      if (type === "arrayBuffer") return typeof value === "string" ? new TextEncoder().encode(value).buffer : value;
-      const text = typeof value === "string" ? value : new TextDecoder().decode(value);
-      return type === "json" ? JSON.parse(text) : text;
-    },
-    async put(key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream) {
-      if (value instanceof ReadableStream) {
-        store.set(key, await new Response(value).arrayBuffer());
-      } else if (typeof value === "string" || value instanceof ArrayBuffer) {
-        store.set(key, value);
-      } else {
-        const copy = new Uint8Array(value.byteLength);
-        copy.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-        store.set(key, copy.buffer);
-      }
-    },
-    async delete(key: string) {
-      store.delete(key);
-    },
-    async list(options?: { prefix?: string; cursor?: string; limit?: number }) {
-      const names = [...store.keys()].filter((key) => !options?.prefix || key.startsWith(options.prefix));
-      return { keys: names.slice(0, options?.limit || 1000).map((name) => ({ name })), list_complete: true };
-    },
-  };
-}
-
-function kvForStore(name: string): CloudflareKV {
-  const binding = ({
-    "orivane-api-cache": "ORIVANE_API_CACHE",
-    "orivane-api-metrics": "ORIVANE_API_METRICS",
-    "orivane-asset-logos": "ORIVANE_ASSET_LOGOS",
-    "orivane-user-state": "ORIVANE_USER_STATE",
-    "orivane-ai-usage": "ORIVANE_AI_USAGE",
-    "orivane-cloud-forecasts": "ORIVANE_CLOUD_FORECASTS",
-  } as Record<string, keyof CloudflareEnv>)[name];
-  const kv = binding ? ACTIVE_ENV[binding] as CloudflareKV | undefined : undefined;
-  return kv || memoryNamespace(name);
-}
-
-function getStore({ name }: { name: string; consistency?: string }) {
-  const kv = kvForStore(name);
-  return {
-    get: async (key: string, options?: { type?: "json" | "arrayBuffer" | "text" }): Promise<any> => kv.get(key, options?.type || "text"),
-    set: (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream) => kv.put(key, value),
-    setJSON: (key: string, value: unknown) => kv.put(key, JSON.stringify(value)),
-    delete: (key: string) => kv.delete(key),
-    list: async (options?: { prefix?: string }) => {
-      const result = await kv.list({ prefix: options?.prefix, limit: 1000 });
-      return { blobs: result.keys.map((item) => ({ key: item.name, etag: "" })), directories: [] };
-    },
-  };
-}
-
-function getDeployStore(options: { name: string; consistency?: string }) {
-  return getStore(options);
-}
-
-function decodeBase64Url(value: string): string {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  return atob(padded);
-}
-
-async function getUser(): Promise<CloudflareUser | null> {
-  const header = ACTIVE_REQUEST?.headers.get("authorization") || "";
-  const token = header.match(/^Bearer\\s+(.+)$/i)?.[1];
-  if (!token) return null;
-  try {
-    const payload = JSON.parse(decodeBase64Url(token.split(".")[1] || "")) as {
-      sub?: string;
-      email?: string;
-      exp?: number;
-      user_metadata?: { full_name?: string; name?: string; avatar_url?: string };
-      app_metadata?: { roles?: string[] };
-    };
-    if (!payload.sub || (payload.exp && payload.exp < Math.floor(Date.now() / 1000))) return null;
-    return { id: payload.sub, email: payload.email || null };
-  } catch {
-    return null;
+function cloudflareDependencies(env: CloudflareEnv): ApiDependencies {
+  const config: Record<string, string | undefined> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (typeof value === "string") config[name] = value;
   }
-}
+
+  function getStore({ name }: ApiStoreOptions): ApiStore {
+    const binding = ({
+      "orivane-api-cache": "ORIVANE_API_CACHE",
+      "orivane-api-metrics": "ORIVANE_API_METRICS",
+      "orivane-asset-logos": "ORIVANE_ASSET_LOGOS",
+      "orivane-user-state": "ORIVANE_USER_STATE",
+      "orivane-ai-usage": "ORIVANE_AI_USAGE",
+      "orivane-cloud-forecasts": "ORIVANE_CLOUD_FORECASTS",
+    } as Record<string, keyof CloudflareEnv>)[name];
+    const kv = binding ? env[binding] as CloudflareKV | undefined : undefined;
+    if (!kv) throw new Error("Missing Cloudflare KV binding: " + (binding || name));
+    return {
+      get: (key, options) => kv.get(key, options?.type || "text"),
+      set: (key, value) => kv.put(key, value),
+      setJSON: (key, value) => kv.put(key, JSON.stringify(value)),
+      delete: (key) => kv.delete(key),
+      list: async (options) => {
+        const result = await kv.list({ prefix: options?.prefix, limit: 1000 });
+        return { blobs: result.keys.map((item) => ({ key: item.name })) };
+      },
+    };
+  }
 
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
-  const apiKey = envValue("RESEND_API_KEY");
-  const from = envValue("ORIVANE_EMAIL_FROM");
+  const apiKey = config.RESEND_API_KEY;
+  const from = config.ORIVANE_EMAIL_FROM;
   if (!apiKey || !from) return false;
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -157,17 +81,24 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
   });
   return response.ok;
 }
+
+  return { env: config, getStore, getDeployStore: getStore, sendEmail };
+}
 `;
 
 let source = await readFile(sourcePath, "utf8");
-source = source
-  .replace('import type { Config, Context } from "@netlify/functions";\n', "")
-  .replace('import { getDeployStore, getStore } from "@netlify/blobs";\n', "")
-  .replace('import { getUser } from "@netlify/identity";\n', "")
-  .replace('import publicData from "./data/public-data.json" with { type: "json" };', 'import publicData from "../../netlify/functions/data/public-data.json" with { type: "json" };')
-  .replace('import { sendEmail } from "./_shared/market-email.ts";\n', "")
-  .replace("export default async (request: Request, context: Context): Promise<Response> => {", "const netlifyHandler = async (request: Request, context: Context): Promise<Response> => {")
-  .replace('\nexport const config: Config = { path: "/api/*" };\n', "");
+const replacements = [
+  ['import type { Config, Context } from "@netlify/functions";\n', ""],
+  ['import { getDeployStore, getStore } from "@netlify/blobs";\n', ""],
+  ['import publicData from "./data/public-data.json" with { type: "json" };', 'import publicData from "../../netlify/functions/data/public-data.json" with { type: "json" };'],
+  ['import { sendEmail } from "./_shared/market-email.ts";\n', ""],
+  ['export default (request: Request, context: Context): Promise<Response> =>\n  createApi({ env: process.env, getStore, getDeployStore, sendEmail }).handle(request, context);', ""],
+  ['\nexport const config: Config = { path: "/api/*" };\n', ""],
+];
+for (const [from, to] of replacements) {
+  if (!source.includes(from)) throw new Error("Cloudflare source adapter no longer matches: " + from.split("\n")[0]);
+  source = source.replace(from, to);
+}
 
 const suffix = `
 
@@ -183,6 +114,7 @@ const EDGE_CACHE_PATHS = new Set([
 
 function edgeCacheable(request: Request): boolean {
   if (request.method !== "GET" || request.headers.has("authorization")) return false;
+  if (new URL(request.url).pathname === "/api/market/snapshot" && new URL(request.url).searchParams.has("mode")) return false;
   const path = new URL(request.url).pathname.replace(/\\/$/, "");
   return EDGE_CACHE_PATHS.has(path)
     || path === "/api/assets/search"
@@ -200,8 +132,7 @@ function edgeResponse(response: Response, status: "HIT" | "MISS" | "BYPASS"): Re
 }
 
 export const onRequest: PagesFunction = async ({ request, env, waitUntil }) => {
-  ACTIVE_ENV = env;
-  ACTIVE_REQUEST = request;
+  const { handle, recordCacheMetric } = createApi(cloudflareDependencies(env));
   const country = (request as Request & { cf?: { country?: string } }).cf?.country;
   const cache = (globalThis as typeof globalThis & { caches?: { default?: CloudflareCache } }).caches?.default;
   const cacheKey = new Request(request.url, { method: "GET" });
@@ -212,7 +143,7 @@ export const onRequest: PagesFunction = async ({ request, env, waitUntil }) => {
       return edgeResponse(cached, "HIT");
     }
   }
-  const response = await netlifyHandler(request, {
+  const response = await handle(request, {
     geo: country ? { country: { code: country } } : undefined,
     deploy: { context: "production" },
     waitUntil,

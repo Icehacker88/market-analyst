@@ -15,6 +15,12 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+// Missing prices arrive as null, "" or 0; Number() would turn them into a 0 reference.
+function positive(value: unknown): number | null {
+  const number = value === null || value === undefined || value === "" ? null : finite(value);
+  return number !== null && number > 0 ? number : null;
+}
+
 function percent(value: number): string {
   return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
 }
@@ -23,7 +29,25 @@ function price(value: number | null): string {
   return value === null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-export function forecastBrief(forecast: Forecast, language: "zh" | "en"): ForecastBrief {
+export type DirectionalLevels = { downside: number | null; upside: number | null; support: number | null };
+
+// Key levels on the correct side of the current price. A bearish forecast's invalidation
+// sits above price, so it is the upside level to reclaim, never a "break below" trigger.
+export function directionalLevels(forecast: Forecast, currentPrice?: unknown): DirectionalLevels {
+  const reference = positive(currentPrice) ?? positive(forecast.base_price);
+  const levels = forecast.key_levels;
+  const invalidation = finite(levels?.invalidation);
+  const below = (value: number | null) => value !== null && value > 0 && (reference === null || value < reference) ? value : null;
+  const above = (value: number | null) => value !== null && value > 0 && (reference === null || value > reference) ? value : null;
+  return {
+    downside: below(invalidation) ?? below(finite(levels?.stop_loss)) ?? below(finite(levels?.support)),
+    upside: above(invalidation) ?? above(finite(levels?.breakout)) ?? above(finite(levels?.resistance)),
+    support: finite(levels?.support),
+  };
+}
+
+// Pass the page's `levels` so this brief and the tailored card name the same prices.
+export function forecastBrief(forecast: Forecast, language: "zh" | "en", levels: DirectionalLevels = directionalLevels(forecast)): ForecastBrief {
   const zh = language === "zh";
   const oneDay = finite(forecast.forecast_1d_return) ?? 0;
   const fiveDay = finite(forecast.forecast_5d_return) ?? 0;
@@ -57,9 +81,7 @@ export function forecastBrief(forecast: Forecast, language: "zh" | "en"): Foreca
   }
   if (probability !== null) probability = Math.max(0, Math.min(100, probability));
 
-  const support = finite(forecast.key_levels?.support);
-  const resistance = finite(forecast.key_levels?.resistance);
-  const invalidation = finite(forecast.key_levels?.invalidation);
+  const { downside, upside, support } = levels;
   const stance = forecast.action?.stance || "wait";
   const actionable = forecast.action?.actionable === true;
   const outlook = zh
@@ -68,18 +90,22 @@ export function forecastBrief(forecast: Forecast, language: "zh" | "en"): Foreca
 
   let holderAdvice: string;
   let newcomerAdvice: string;
-  if (stance === "reduce") {
-    holderAdvice = zh ? `反弹时可考虑分批减仓，不建议加仓；跌破 ${price(invalidation)} 时优先控制风险。` : `Consider trimming into strength and avoid adding; prioritize risk control below ${price(invalidation)}.`;
-    newcomerAdvice = zh ? `暂不适合新开仓，等待重新站稳 ${price(resistance)} 或预测转强。` : `Avoid a new entry until price reclaims ${price(resistance)} or the forecast improves.`;
-  } else if (stance === "accumulate" && actionable) {
+  if (!actionable) {
+    // Below the action threshold the page only describes conditions, never position moves.
+    holderAdvice = zh ? `证据未达操作门槛，不据此加仓或减仓。下方关注 ${price(downside)} 是否失守，上方关注能否有效站上 ${price(upside)}。` : `Evidence is below the action threshold, so this is not a reason to add or trim. Watch whether ${price(downside)} holds below and whether price can hold above ${price(upside)}.`;
+    newcomerAdvice = zh ? `证据未达操作门槛，不构成入场依据。可在 ${price(support)} 附近企稳或有效站上 ${price(upside)} 后重新评估。` : `Evidence is below the action threshold and is not an entry signal. Reassess if ${price(support)} holds or price holds above ${price(upside)}.`;
+  } else if (stance === "reduce") {
+    holderAdvice = zh ? `反弹时可考虑分批减仓，不建议加仓；跌破 ${price(downside)} 时优先控制风险。` : `Consider trimming into strength and avoid adding; prioritize risk control below ${price(downside)}.`;
+    newcomerAdvice = zh ? `暂不适合新开仓，等待重新站稳 ${price(upside)} 或预测转强。` : `Avoid a new entry until price reclaims ${price(upside)} or the forecast improves.`;
+  } else if (stance === "accumulate") {
     holderAdvice = zh ? `可继续持有；回踩 ${price(support)} 附近企稳时可考虑小幅分批加仓。` : `Holding remains reasonable; consider small staged adds only if ${price(support)} holds.`;
     newcomerAdvice = zh ? `可等待回踩支撑不破后分批入场，不建议直接追涨。` : `Consider staged entry after a confirmed hold of support; avoid chasing.`;
   } else if (stance === "hold") {
-    holderAdvice = zh ? `以持有观察为主，暂不追加强仓；跌破 ${price(invalidation)} 时考虑减仓。` : `Hold and monitor rather than adding aggressively; consider trimming below ${price(invalidation)}.`;
-    newcomerAdvice = zh ? `等待回踩 ${price(support)} 企稳，或放量突破 ${price(resistance)} 后再考虑入场。` : `Wait for support near ${price(support)} to hold or a volume-backed break above ${price(resistance)}.`;
+    holderAdvice = zh ? `以持有观察为主，暂不追加强仓；跌破 ${price(downside)} 时考虑减仓。` : `Hold and monitor rather than adding aggressively; consider trimming below ${price(downside)}.`;
+    newcomerAdvice = zh ? `等待回踩 ${price(support)} 企稳，或放量突破 ${price(upside)} 后再考虑入场。` : `Wait for support near ${price(support)} to hold or a volume-backed break above ${price(upside)}.`;
   } else {
-    holderAdvice = zh ? `不因单次预测立即抛售，但暂不加仓；跌破 ${price(invalidation)} 时考虑减仓。` : `Do not sell solely on one forecast, but avoid adding; consider trimming below ${price(invalidation)}.`;
-    newcomerAdvice = zh ? `当前更适合等待，至少确认 ${price(support)} 支撑有效或突破 ${price(resistance)} 后再入场。` : `Waiting is cleaner until ${price(support)} holds or price breaks above ${price(resistance)}.`;
+    holderAdvice = zh ? `不因单次预测立即抛售，但暂不加仓；跌破 ${price(downside)} 时考虑减仓。` : `Do not sell solely on one forecast, but avoid adding; consider trimming below ${price(downside)}.`;
+    newcomerAdvice = zh ? `当前更适合等待，至少确认 ${price(support)} 支撑有效或突破 ${price(upside)} 后再入场。` : `Waiting is cleaner until ${price(support)} holds or price breaks above ${price(upside)}.`;
   }
 
   return { trend, outlook, probability, probabilityNote, holderAdvice, newcomerAdvice, tone };

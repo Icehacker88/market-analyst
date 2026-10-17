@@ -1,6 +1,9 @@
-import type { HistoryRecord } from "./types";
+import type { History, HistoryRecord, PeriodReturns } from "./types";
 import type { MessageKey } from "./i18n";
 import { validatedPriceRecords } from "./history-series";
+import { startForRange } from "./selection";
+
+export const RECENT_RETURN_RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y"] as const;
 
 export const RANGE_OPTIONS: { range: string; label: MessageKey }[] = [
   { range: "1D", label: "period1d" },
@@ -29,6 +32,33 @@ export function periodReturn(records: HistoryRecord[], range: string, now = new 
   }
 
   return baseline?.Price ? latest.Price / baseline.Price - 1 : null;
+}
+
+export function periodReturnsFromHistory(history: History, ranges: readonly string[], longTermComplete = false): PeriodReturns {
+  const now = new Date(`${history.data_as_of}T12:00:00Z`);
+  return {
+    symbol: history.symbol,
+    data_as_of: history.data_as_of,
+    returns: Object.fromEntries(ranges.map((item) => [item, periodReturn(history.records, item, now)])),
+    long_term_complete: longTermComplete,
+  };
+}
+
+// Adds only the ranges `previous` lacks. /api/market/returns is cached longer than the
+// history already on screen, so its result must not replace a value the page shows.
+export function fillMissingPeriodReturns(previous: PeriodReturns | undefined, incoming: PeriodReturns): PeriodReturns {
+  if (!previous) return incoming;
+  const returns = { ...previous.returns };
+  for (const [range, value] of Object.entries(incoming.returns)) {
+    if (returns[range] == null) returns[range] = value;
+  }
+  return { ...previous, returns, long_term_complete: Boolean(previous.long_term_complete || incoming.long_term_complete) };
+}
+
+// Recent ranges a daily history requested from `loadStart` fully covers. A shorter
+// window would otherwise fall back to its first point and mislabel 6M or 1Y returns.
+export function recentRangesWithin(loadStart: string, now = new Date()): string[] {
+  return RECENT_RETURN_RANGES.filter((range) => startForRange(range, now) >= loadStart);
 }
 
 function rangeStart(range: string, now: Date): string {

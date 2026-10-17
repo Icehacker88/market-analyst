@@ -15,8 +15,8 @@ type Change = { asset: Asset; previous: Snapshot; current: Snapshot; forecast: F
 
 const VISIT_SNAPSHOT_KEY = "orivane-last-visit-forecasts-v1";
 
-function readSnapshots(): Record<string, Snapshot> {
-  try { return JSON.parse(localStorage.getItem(VISIT_SNAPSHOT_KEY) || "{}") as Record<string, Snapshot>; } catch { return {}; }
+function readSnapshots(privateStorage: Pick<Storage, "getItem">): Record<string, Snapshot> {
+  try { return JSON.parse(privateStorage.getItem(VISIT_SNAPSHOT_KEY) || "{}") as Record<string, Snapshot>; } catch { return {}; }
 }
 
 function important(previous: Snapshot, current: Snapshot): boolean {
@@ -31,7 +31,7 @@ function important(previous: Snapshot, current: Snapshot): boolean {
 }
 
 export function WatchlistChangeSummary() {
-  const { favorites, language } = useApp();
+  const { privateStorage, favorites, language } = useApp();
   const zh = language === "zh";
   const [changes, setChanges] = useState<Change[]>([]);
   const [ready, setReady] = useState(false);
@@ -61,9 +61,11 @@ export function WatchlistChangeSummary() {
   useEffect(() => {
     if (!shouldLoad || !key || loaded.current === key) return;
     loaded.current = key;
-    const previous = readSnapshots();
+    const previous = readSnapshots(privateStorage);
     setHasBaseline(Object.keys(previous).length > 0);
+    let active = true;
     const timer = window.setTimeout(() => Promise.allSettled(favorites.slice(0, 6).map(async (asset) => ({ asset, forecast: await getForecast(asset.symbol) }))).then((settled) => {
+      if (!active) return;
       const next = { ...previous };
       const changed: Change[] = [];
       settled.forEach((result) => {
@@ -79,12 +81,12 @@ export function WatchlistChangeSummary() {
         if (previous[asset.symbol] && important(previous[asset.symbol], current)) changed.push({ asset, previous: previous[asset.symbol], current, forecast });
         next[asset.symbol] = current;
       });
-      localStorage.setItem(VISIT_SNAPSHOT_KEY, JSON.stringify(next));
+      privateStorage.setItem(VISIT_SNAPSHOT_KEY, JSON.stringify(next));
       setChanges(changed);
       setReady(true);
     }), 250);
-    return () => window.clearTimeout(timer);
-  }, [favorites, key, shouldLoad]);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [favorites, key, privateStorage, shouldLoad]);
 
   if (!favorites.length) return null;
   return <section className="visit-changes" ref={sectionRef}>

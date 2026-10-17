@@ -10,7 +10,7 @@ import { displayAssetName } from "@/lib/assets";
 import { formatMetricPercent, formatNumber, formatPercent } from "@/lib/format";
 import { calculatePortfolioAnalytics } from "@/lib/portfolio-analytics";
 import { startForRange } from "@/lib/selection";
-import type { AiAnalysis, AiChatMessage, Asset, Forecast, History, Portfolio, PortfolioHolding } from "@/lib/types";
+import type { AiAnalysis, Asset, Forecast, History, Portfolio, PortfolioHolding } from "@/lib/types";
 import { AppLink as Link } from "./app-link";
 import { useApp } from "./providers";
 import { ResearchNavigation } from "./research-navigation";
@@ -35,15 +35,6 @@ export function PortfolioPage() {
   const holdingsKey = holdings.map((item) => `${item.symbol}:${item.quantity}:${item.cost}`).join("|");
 
   useEffect(() => { trackEvent("portfolio_view"); }, []);
-  useEffect(() => {
-    if (userState.portfolio_ai_chat?.messages.length) return;
-    try {
-      const legacy = JSON.parse(localStorage.getItem("orivane-portfolio-ai-v1") || "[]") as Array<Partial<AiChatMessage>>;
-      if (!legacy.length) return;
-      const messages = legacy.map((message) => createChatMessage(message.role === "assistant" ? "assistant" : "user", String(message.content || "")));
-      updateUserState((current) => ({ ...current, portfolio_ai_chat: compactChatThread(messages) }));
-    } catch { /* No legacy thread. */ }
-  }, [updateUserState, userState.portfolio_ai_chat]);
   useEffect(() => {
     const symbols = [...new Set(holdings.map((item) => item.symbol))];
     if (!symbols.length) { setAssets({}); setHistories({}); setForecasts({}); return; }

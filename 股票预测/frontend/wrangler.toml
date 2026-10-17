@@ -30,3 +30,38 @@ id = "071c16b453744762a683723760d2ec29"
 [[kv_namespaces]]
 binding = "ORIVANE_CLOUD_FORECASTS"
 id = "ad46e096b1e3450485200e76ed56916a"
+
+# Preview must never inherit production KV namespaces or service credentials.
+# OAuth, AI generation, outbound mail and optimizer credentials are absent in Preview.
+[env.preview.vars]
+ORIVANE_MARKET_DATA_PROVIDER = "free-yahoo-eastmoney"
+ORIVANE_AI_DAILY_LIMIT = "2"
+ORIVANE_ADMIN_EMAILS = "preview-admin@orivane.test"
+ORIVANE_SKIP_SEO_REFRESH = "1"
+ORIVANE_SEO_API_BASE = "https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev"
+ORIVANE_SITE_URL = "https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev"
+NEXT_PUBLIC_SITE_URL = "https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_AI_USAGE"
+id = "62b76fbe72ce444da8a17af8a642d805"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_API_CACHE"
+id = "1c3e6e8fa836463b90b61081ff7fa200"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_API_METRICS"
+id = "76daa9dd753949549c0b2b4c0a36bd43"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_ASSET_LOGOS"
+id = "33ac7605091a47ec94205f0f92efad64"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_CLOUD_FORECASTS"
+id = "939f724a3a5449fdb158d3a227be6e19"
+
+[[env.preview.kv_namespaces]]
+binding = "ORIVANE_USER_STATE"
+id = "802af4a8ace549f8b9329b315f767ed0"

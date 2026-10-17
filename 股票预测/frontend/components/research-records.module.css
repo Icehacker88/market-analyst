@@ -1,0 +1,50 @@
+.entry, .record, .empty { border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 18px; min-width: 0; }
+.entry { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.entry p, .section > header p, .note, .dates { color: var(--muted); font-size: 12px; line-height: 1.65; margin: 6px 0 0; }
+.entry > p { flex-basis: 100%; }
+.entry button, .section button, .dialog button, .record footer a, .empty a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 9px 14px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 7px; cursor: pointer; font-size: 13px; }
+.entry > button, .dialog button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.section { margin: 26px 0; scroll-margin-top: 80px; }
+.section > header, .record > header, .dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.section h2, .dialog h2 { margin: 0; font-size: 20px; }
+.section > header > span, .record small, .dialog header p { font-size: 12px; color: var(--muted); }
+.list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+.record header span { font-size: 12px; padding: 4px 8px; background: var(--surface-2); border-radius: 4px; white-space: nowrap; }
+.record dl { display: grid; gap: 12px; margin: 16px 0; }
+.record dt { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.record dd { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.record summary { font-size: 13px; cursor: pointer; padding: 14px 0; min-height: 44px; }
+.record footer, .dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.record footer a, .empty a, .entry a { color: var(--accent); }
+.empty { font-size: 14px; color: var(--muted); line-height: 1.8; }
+.empty a { margin-top: 10px; display: flex; width: fit-content; }
+.dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); margin: auto; padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); overflow-y: auto; }
+.dialog::backdrop { background: rgba(20,30,28,.48); }
+.dialog header button { padding: 8px; min-width: 44px; }
+.dialog form { display: grid; gap: 14px; }
+.dialog label { display: grid; gap: 7px; min-width: 0; font-size: 13px; }
+.dialog input, .dialog textarea, .dialog select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); font: inherit; min-height: 44px; box-sizing: border-box; }
+.dialog textarea { resize: vertical; line-height: 1.6; }
+.optional { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+.dialog button:disabled { opacity: .6; cursor: default; }
+.error { color: var(--negative); font-size: 13px; line-height: 1.6; }
+@media(max-width:767px) { .list, .optional { grid-template-columns: 1fr; } .dialog { padding: 18px; } .entry { align-items: flex-start; } }
+
+.section > header > span { white-space: nowrap; }
+.reviewAction { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.reviewAction button { min-height: 44px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--border); border-radius: 7px; color: var(--accent); background: var(--surface); }
+.reviewContext { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.reviewDialog { width: min(740px, calc(100vw - 24px)); }
+.reviewDialog dl { display: grid; gap: 10px; font-size: 13px; }
+.reviewDialog dt { color: var(--muted); }
+.reviewDialog dd { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.reviewDialog summary { min-height: 44px; padding: 10px 0; cursor: pointer; }
+.reviewContext h3, .reviewHistory h4 { margin: 0 0 8px; font-size: 14px; }
+.reviewHistory section { border-top: 1px solid var(--border); padding: 14px 0; }
+
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.savedNotice { display: block; padding: 12px 14px; margin: 12px 0; border: 1px solid var(--accent); border-radius: 8px; background: var(--surface); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.savedNotice a { color: var(--accent); display: inline-block; padding: 8px 4px; min-height: 44px; }
+.reviewHistory section { scroll-margin-top: 90px; }
+.reviewHistory section:target { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+.dialog form > p[role="status"] { font-size: 12px; color: var(--muted); line-height: 1.6; }

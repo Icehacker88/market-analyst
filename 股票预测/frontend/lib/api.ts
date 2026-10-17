@@ -5,6 +5,23 @@ const SEARCH_CACHE_MS = 30 * 60 * 1000;
 const RESPONSE_CACHE_PREFIX = "orivane-response-v2:";
 const INFLIGHT_GETS = new Map<string, Promise<unknown>>();
 
+// Only homepage public resources publish updates. Private/account requests are untouched.
+export type HomeResponsePath = "/api/home" | "/api/forecast/scoreboard?v=2";
+export type HomeResponseEvent = {
+  status: "loading" | "ready" | "stale" | "error";
+  payload?: unknown;
+};
+const HOME_RESPONSE_LISTENERS = new Map<string, Set<(event: HomeResponseEvent) => void>>();
+export function subscribeHomeResponse(path: HomeResponsePath, listener: (event: HomeResponseEvent) => void): () => void {
+  const listeners = HOME_RESPONSE_LISTENERS.get(path) || new Set();
+  listeners.add(listener);
+  HOME_RESPONSE_LISTENERS.set(path, listeners);
+  return () => { listeners.delete(listener); if (!listeners.size) HOME_RESPONSE_LISTENERS.delete(path); };
+}
+function publishHomeResponse(path: string, event: HomeResponseEvent): void {
+  HOME_RESPONSE_LISTENERS.get(path)?.forEach((listener) => listener(event));
+}
+
 type ResponseCachePolicy = { freshMs: number; staleMs: number };
 type StoredResponse<T> = { value: T; storedAt: number };
 
@@ -56,8 +73,8 @@ export async function getHealth(): Promise<{ status: "checking" | "ok" | "degrad
   return request<{ status: "checking" | "ok" | "degraded"; yahoo_finance?: string; eastmoney_data?: string; last_updated?: string | null; probe_pending?: boolean; market_data_provider?: string; paid_provider_ready?: boolean }>("/api/health");
 }
 
-export async function getMetrics(): Promise<MetricsSummary> {
-  return (await request<{ data: MetricsSummary }>("/api/admin/metrics")).data;
+export async function getMetrics(options?: UserStateRequestOptions): Promise<MetricsSummary> {
+  return (await request<{ data: MetricsSummary }>("/api/admin/metrics", userStateRequestOptions(options))).data;
 }
 
 function readResponseCache<T>(path: string, policy: ResponseCachePolicy): { fresh: T | null; stale: T | null } {
@@ -118,11 +135,8 @@ function combinedSignal(external: AbortSignal | null | undefined, timeoutMs: num
 
 async function executeRequest<T>(path: string, init: RequestInit | undefined, stale: T | null, cacheable: boolean): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> | undefined || {}) };
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("orivane-auth-token");
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
   const timeout = typeof window !== "undefined" ? combinedSignal(init?.signal, requestTimeout(path)) : null;
+  const requestOwner = headers["x-orivane-user-id"] || null;
   try {
     const response = await fetch(`${apiBase()}${path}`, {
       ...init,
@@ -131,10 +145,22 @@ async function executeRequest<T>(path: string, init: RequestInit | undefined, st
       headers,
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new ApiError(payload?.error?.message || payload?.detail || "Request failed", response.status);
+    if (!response.ok) {
+      const adminDenied = path.startsWith("/api/admin/") && response.status === 403;
+      // /auth/me already handles its own failure; do not recursively revalidate it.
+      const sessionDenied = response.status === 401 && !path.startsWith("/api/auth/");
+      if (typeof window !== "undefined" && !timeout?.signal.aborted && (adminDenied || sessionDenied)) {
+        window.dispatchEvent(new CustomEvent("orivane-auth-rejected", {
+          detail: { userId: requestOwner, scope: adminDenied ? "admin" : "session" },
+        }));
+      }
+      throw new ApiError(payload?.error?.message || payload?.detail || "Request failed", response.status);
+    }
     if (cacheable) writeResponseCache(path, payload);
+    publishHomeResponse(path, { status: "ready", payload });
     return payload;
   } catch (cause) {
+    publishHomeResponse(path, { status: "error" });
     if (stale !== null) return stale;
     if (timeout?.timedOut()) throw new ApiError("Request timed out", 408);
     throw cause;
@@ -146,16 +172,23 @@ async function executeRequest<T>(path: string, init: RequestInit | undefined, st
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isGet = !init?.method || init.method.toUpperCase() === "GET";
   const policy = isGet && init?.cache !== "no-store" ? responseCachePolicy(path) : null;
-  let cached = policy ? readResponseCache<T>(path, policy) : { fresh: null, stale: null };
-  if (policy && cached.fresh === null && cached.stale === null && typeof window !== "undefined") {
+  const bypassCache = init?.cache === "reload";
+  let cached = policy && !bypassCache ? readResponseCache<T>(path, policy) : { fresh: null, stale: null };
+  if (policy && !bypassCache && cached.fresh === null && cached.stale === null && typeof window !== "undefined") {
     const offline = await readOfflineResponse<T>(path);
     const evaluated = evaluateStoredResponse(offline ? { value: offline.value, storedAt: offline.storedAt } : null, policy);
     cached = { fresh: evaluated.fresh, stale: evaluated.stale };
     if (evaluated.expired) void removeOfflineResponse(path);
   }
-  if (cached.fresh !== null) return cached.fresh;
-  const key = isGet || path === "/api/compare" ? `${init?.method || "GET"}:${path}:${String(init?.body || "")}` : "";
+  if (cached.fresh !== null) {
+    publishHomeResponse(path, { status: "ready", payload: cached.fresh });
+    return cached.fresh;
+  }
+  const privateRequest = ["/api/auth/me", "/api/user/state", "/api/admin/metrics"].includes(path.split("?")[0]);
+  const key = !privateRequest && !init?.signal && (isGet || path === "/api/compare")
+    ? `${init?.method || "GET"}:${path}:${String(init?.body || "")}` : "";
   if (cached.stale !== null) {
+    publishHomeResponse(path, { status: "stale", payload: cached.stale });
     if (!key || !INFLIGHT_GETS.has(key)) {
       const refresh = executeRequest<T>(path, init, null, Boolean(policy));
       if (key) INFLIGHT_GETS.set(key, refresh);
@@ -165,6 +198,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     return cached.stale;
   }
+  publishHomeResponse(path, { status: "loading" });
   if (key && INFLIGHT_GETS.has(key)) return INFLIGHT_GETS.get(key) as Promise<T>;
   const pending = executeRequest(path, init, cached.stale, Boolean(policy));
   if (key) INFLIGHT_GETS.set(key, pending);
@@ -178,24 +212,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export function storeAuthSession(session: AuthSession): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("orivane-auth-token");
-  localStorage.setItem("orivane-auth-user", JSON.stringify(session.user));
+  localStorage.removeItem("orivane-auth-user");
+  // This marker only notifies other tabs. It is never used to authenticate or render a user.
+  localStorage.setItem("orivane-auth-user-id", session.user.id);
 }
 
 export function clearAuthSession(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("orivane-auth-token");
   localStorage.removeItem("orivane-auth-user");
-}
-
-export function readStoredAuthUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const user = JSON.parse(localStorage.getItem("orivane-auth-user") || "null") as AuthUser | null;
-    return user?.email ? user : null;
-  } catch {
-    clearAuthSession();
-    return null;
-  }
+  localStorage.removeItem("orivane-auth-user-id");
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
@@ -266,12 +292,12 @@ export async function getMarketOverview(): Promise<MarketOverview> {
   return (await request<{ data: MarketOverview }>("/api/market/overview")).data;
 }
 
-export async function getHomeData(): Promise<HomeData> {
-  return (await request<{ data: HomeData }>("/api/home")).data;
+export async function getHomeData(refresh = false): Promise<HomeData> {
+  return (await request<{ data: HomeData }>("/api/home", refresh ? { cache: "reload" } : undefined)).data;
 }
 
-export async function getForecastScoreboard(): Promise<ForecastScoreboard> {
-  return (await request<{ data: ForecastScoreboard }>("/api/forecast/scoreboard?v=2")).data;
+export async function getForecastScoreboard(refresh = false): Promise<ForecastScoreboard> {
+  return (await request<{ data: ForecastScoreboard }>("/api/forecast/scoreboard?v=2", refresh ? { cache: "reload" } : undefined)).data;
 }
 
 export async function getScreener(): Promise<ScreenerRow[]> {
@@ -299,8 +325,6 @@ export async function streamAiAnalysis(
   signal?: AbortSignal,
 ): Promise<AiAnalysis> {
   const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
-  const token = typeof window !== "undefined" ? localStorage.getItem("orivane-auth-token") : null;
-  if (token) headers.Authorization = `Bearer ${token}`;
   const timeout = typeof window !== "undefined" ? combinedSignal(signal, 50_000) : null;
   try {
     const response = await fetch(`${apiBase()}/api/ai/analysis/stream`, {
@@ -358,20 +382,29 @@ export async function getCompanyResearch(symbol: string): Promise<CompanyResearc
   return (await request<{ data: CompanyResearch }>(`/api/company/research?symbol=${encodeURIComponent(symbol)}`)).data;
 }
 
-export async function getUserState(): Promise<UserState> {
-  return (await request<{ data: UserState }>("/api/user/state")).data;
+type UserStateRequestOptions = { expectedUserId?: string; signal?: AbortSignal };
+
+function userStateRequestOptions(options?: UserStateRequestOptions): RequestInit {
+  return {
+    signal: options?.signal,
+    headers: options?.expectedUserId ? { "x-orivane-user-id": options.expectedUserId } : {},
+  };
 }
 
-export async function saveUserState(state: UserState): Promise<UserState> {
-  return (await request<{ data: UserState }>("/api/user/state", { method: "PUT", body: JSON.stringify({ state }) })).data;
+export async function getUserState(options?: UserStateRequestOptions): Promise<UserState> {
+  return (await request<{ data: UserState }>("/api/user/state", userStateRequestOptions(options))).data;
 }
 
-export async function saveUserStatePatch(patch: Partial<UserState>): Promise<UserState> {
-  return (await request<{ data: UserState }>("/api/user/state", { method: "PATCH", body: JSON.stringify({ patch }) })).data;
+export async function saveUserState(state: UserState, options?: UserStateRequestOptions): Promise<UserState> {
+  return (await request<{ data: UserState }>("/api/user/state", { ...userStateRequestOptions(options), method: "PUT", body: JSON.stringify({ state }) })).data;
 }
 
-export async function deleteAccountApi(): Promise<void> {
-  await request<{ data: boolean }>("/api/auth/account", { method: "DELETE" });
+export async function saveUserStatePatch(patch: Partial<UserState>, options?: UserStateRequestOptions): Promise<UserState> {
+  return (await request<{ data: UserState }>("/api/user/state", { ...userStateRequestOptions(options), method: "PATCH", body: JSON.stringify({ patch }) })).data;
+}
+
+export async function deleteAccountApi(options?: UserStateRequestOptions): Promise<void> {
+  await request<{ data: boolean }>("/api/auth/account", { ...userStateRequestOptions(options), method: "DELETE" });
   clearAuthSession();
 }
 
@@ -414,6 +447,18 @@ export async function getMarketSnapshots(
     v: "1",
   });
   return (await request<{ data: MarketSnapshot[] }>(`/api/market/snapshot?${params}`)).data;
+}
+
+// My Research owns its observable cache and loads bounded batches progressively.
+// Keep this opt-in transport separate from the existing snapshot consumers.
+export function researchSnapshotPath(symbols: string[], _start?: string): string {
+  if (!symbols.length || symbols.length > 4) throw new Error("Research snapshot batches require 1–4 assets.");
+  const params = new URLSearchParams({ symbols: symbols.join(","), mode: "read-only", v: "2" });
+  return `/api/market/snapshot?${params}`;
+}
+
+export async function getResearchSnapshotBatch(symbols: string[], start: string): Promise<MarketSnapshot[]> {
+  return (await request<{ data: MarketSnapshot[] }>(researchSnapshotPath(symbols, start), { cache: "no-store" })).data;
 }
 
 export async function getPeriodReturns(symbol: string, scope: "recent" | "full" = "recent"): Promise<PeriodReturns> {

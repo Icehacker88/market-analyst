@@ -4,14 +4,15 @@
 
 ## 当前应使用的版本
 
+2026-10-17 更新：已验收的产品分支合并进 `main`。`main` 现在是唯一的产品主线。
+
 | 用途 | GitHub 分支 / 提交 | 验证与发布状态 |
 | --- | --- | --- |
-| 稳定产品与后续 UI 基线 | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `b41889b9dd7988bfba421ccc32ca8d9af47dfba1`（2026-10-17 依次合并 PR #5 周期涨跌幅、PR #8 logo 底纹、PR #10 建议价位修复，均已部署到 Production；此前 Preview 验收版本为 `aee719e`） | 首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；这些阶段冻结 |
-| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1) · `75289a744e6533f0c3da3dd007a1656b5fc03dc1` | 基于上述产品提交，仅本地完成；346 项测试、typecheck、Cloudflare build、Pages 打包通过。未部署认证版本 |
-| 协作文档 | `codex/agent-collaboration-docs-20261015` · [PR #1](https://github.com/Icehacker88/market-analyst/pull/1) | 文档更新待审阅；此分支本身不包含最新产品源码 |
-| main | 本次读取为 `553438897d501a33c7e120009bffd36463c7962e` | 自动任务仍在写入预测账本；不等同于最新 Orivane 产品版本。本轮不覆盖或合并 |
+| 产品主线 | `main`（2026-10-17 合并 `codex/ui-preview-ff7fd40d` @ `b41889b`） | 合并后 `股票预测/frontend` 与 Production 部署 `0b78f7aa` 的来源 `b41889b` 逐字节一致。首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；周期涨跌幅、logo 底纹、建议价位三项修复已上线 |
+| 原产品分支（已退役） | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `b41889b9dd7988bfba421ccc32ca8d9af47dfba1` | 保留作历史，不再在上面开发或提 PR。此前 Preview 验收版本为 `aee719e` |
+| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1) · `75289a744e6533f0c3da3dd007a1656b5fc03dc1` | 基于 `aee719e`，仅本地完成；346 项测试、typecheck、Cloudflare build、Pages 打包通过。未部署认证版本；需要在 `main` 的基础上更新（Codex） |
 
-以上 UI 与认证分支于本轮推送至 GitHub，保留原提交 SHA 和隔离边界。同步前两工作树均干净。不得从旧 main 工作区构建最新产品；不得合并或 cherry-pick `codex/auth-admin-frozen-20260930`。
+不得从原 main 工作区（有未提交改动）构建产品；不得合并或 cherry-pick `codex/auth-admin-frozen-20260930`。
 
 ## 已完成产品阶段
 
