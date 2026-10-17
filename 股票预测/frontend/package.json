@@ -14,10 +14,13 @@
     "typecheck": "tsc --noEmit",
     "pretest": "node scripts/generate-cloudflare-worker.mjs",
     "test": "vitest run",
-    "test:security": "node scripts/generate-cloudflare-worker.mjs && vitest run tests/cloudflare-auth.test.ts tests/cloudflare-runtime.test.ts components/account-isolation.test.tsx lib/private-storage.test.ts lib/api-auth.test.ts"
+    "test:security": "node scripts/generate-cloudflare-worker.mjs && vitest run tests/cloudflare-auth.test.ts tests/cloudflare-runtime.test.ts components/account-isolation.test.tsx lib/private-storage.test.ts lib/api-auth.test.ts",
+    "test:password": "node scripts/generate-cloudflare-worker.mjs && vitest run tests/cloudflare-password.test.ts components/auth-challenge.test.tsx components/auth-password-ui.test.tsx",
+    "benchmark:password": "node scripts/benchmark-password.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "^10.7.9",
+    "@noble/hashes": "2.4.0",
     "echarts": "^6.1.0",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
@@ -35,6 +38,7 @@
     "@types/react-dom": "^19.0.0",
     "esbuild": "0.28.0",
     "fake-indexeddb": "^6.2.5",
+    "hash-wasm": "4.12.0",
     "jsdom": "^26.0.0",
     "miniflare": "4.20260630.0",
     "postcss": "^8.5.15",

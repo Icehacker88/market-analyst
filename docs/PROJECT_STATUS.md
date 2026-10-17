@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 产品主线 | `main`（2026-10-17 由 [PR #15](https://github.com/Icehacker88/market-analyst/pull/15) 合并 `codex/ui-preview-ff7fd40d` @ `b41889b`，合并提交 `3e3dd7f`） | 合并后 `main` 的前端应用源码、API 维护源、Worker 生成器、依赖和配置都与 Production 部署 `0b78f7aa` 的来源 `b41889b` 一致，只有 `股票预测/frontend/AGENTS.md` 文档不同。首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；周期涨跌幅、logo 底纹、建议价位三项修复已上线 |
 | 原产品分支（已退役） | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `b41889b9dd7988bfba421ccc32ca8d9af47dfba1` | 保留作历史，不再在上面开发或提 PR。此前 Preview 验收版本为 `aee719e` |
-| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1) · `75289a744e6533f0c3da3dd007a1656b5fc03dc1` | 基于 `aee719e`，仅本地完成；346 项测试、typecheck、Cloudflare build、Pages 打包通过。未部署认证版本；需要在 `main` 的基础上更新（Codex） |
+| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1)；原实现 `75289a7`，2026-10-17 合并 main `b71c3b1` | AUTH-REBASE-MAIN 本地更新完成、待 PR 交叉审阅；56 文件 / 361 项测试、typecheck、Cloudflare build 通过。认证实现和配置未因本次整合改变；未部署或启用入口。见[验证报告](auth-rebase-main-2026-10-17.md) |
 
 不得从原 main 工作区（有未提交改动）构建产品；不得合并或 cherry-pick `codex/auth-admin-frozen-20260930`。
 

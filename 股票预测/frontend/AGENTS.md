@@ -1,11 +1,11 @@
-# Orivane UI workspace boundary
+# Orivane Authentication Round 1 workspace
 
 尽可能减少输出内容，专注做事。
 
-UI/product work uses isolated feature branches based on `origin/main`, which is the integration line. The product branch `codex/ui-preview-ff7fd40d` (source commit `b41889b`) was merged into `main` on 2026-10-17 by merge commit `3e3dd7f` and is retired (do not develop on it). Its history starts at source commit `400a2cdd4d441e2a302d23feb8380c64b69e30b2` (Preview ff7fd40d). Read `docs/version-isolation-2026-09-30.md` before release work.
+Product work uses isolated feature branches based on `origin/main`, which is the integration line. This isolated worktree uses `codex/authentication-round1`; AUTH-REBASE-MAIN updates the original local authentication implementation (`75289a7`, based on `aee719e`) by merging main `b71c3b13ae438e5c969832ec4d10712e300da53b`. The user authorizes branch integration, local verification and a PR only, not new authentication behavior or configuration changes. Do not merge or cherry-pick `codex/auth-admin-frozen-20260930`, or copy files/build output from the original dirty or UI checkouts. The retired product branch is historical only.
 
-Authentication/password development is frozen. Preserve existing deployed password, OAuth, session, administrator authorization, account isolation and Production configuration. Do not merge/cherry-pick `codex/auth-admin-frozen-20260930` or copy files/build output from the original dirty checkout. A separate explicit user instruction is required to reopen auth work.
+Preserve existing account UUIDs, KV sessions, user-state paths, Research Record/Review, homepage, read-only Snapshot and prediction algorithms. New credential writes require explicit enablement; registration remains disabled by default. Never log credentials, credential records or session tokens. Only synthetic accounts may be used in tests.
 
-Before a separately authorized Preview deployment, review the complete diff against `codex/preview-ff7fd40d-source`, verify frozen auth/config files and generated Worker, use a clean worktree at the reviewed `main` commit, confirm the Preview branch and all six isolated KV bindings, and skip SEO refresh. Do not use default deployment target inference, Production deployment, or optimizer/all deployment commands. Never deploy simply because code was committed.
+No plan/billing changes, deployment, remote account mutation or Production configuration changes are authorized. Keep one bounded integration commit, a clean worktree, and stop for separate Preview authorization after local verification.
 
-Product development cadence: one explicitly bounded round, one reviewed commit, then separately authorized Preview acceptance before the next round. Keep this worktree clean between rounds.
+Before a separately authorized Preview deployment, read `docs/version-isolation-2026-09-30.md` and the authentication delivery report, review the full authentication diff against main and the deployed baseline, verify maintenance source and generated Worker, use a clean worktree at the reviewed commit, confirm the Preview branch and all six isolated KV bindings, and skip SEO refresh. Do not use default deployment target inference, Production deployment, or optimizer/all deployment commands. Never deploy simply because code was committed.
