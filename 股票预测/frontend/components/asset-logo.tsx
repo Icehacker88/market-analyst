@@ -1,6 +1,5 @@
 "use client";
 
-import { ChartNoAxesCombined } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Asset } from "@/lib/types";
 
@@ -26,7 +25,6 @@ export const REMOTE_LOGO_UNAVAILABLE = new Set(["301396.SZ"]);
 
 export function AssetLogo({ asset, size = "medium" }: { asset: Asset; size?: "small" | "medium" | "large" }) {
   const root = useRef<HTMLSpanElement>(null);
-  const [loadedSource, setLoadedSource] = useState<string | null>(null);
   const [failedSymbol, setFailedSymbol] = useState<string | null>(null);
   const [remote, setRemote] = useState<{ symbol: string; url: string } | null>(null);
   const localLogo = LOCAL_ASSET_LOGOS[asset.symbol];
@@ -60,15 +58,15 @@ export function AssetLogo({ asset, size = "medium" }: { asset: Asset; size?: "sm
     };
   }, [asset.symbol, localLogo, eligible]);
 
+  // No placeholder art: transparent logos let anything behind them show through,
+  // so an asset without a usable logo keeps a plain circle.
   return (
     <span ref={root} className={`asset-logo ${size}`} aria-hidden="true">
-      {(!logoSource || failedSymbol === asset.symbol || loadedSource !== logoSource) && <ChartNoAxesCombined />}
       {logoSource && failedSymbol !== asset.symbol && <img
         src={logoSource}
         alt=""
         loading="lazy"
         decoding="async"
-        onLoad={() => setLoadedSource(logoSource)}
         onError={() => setFailedSymbol(asset.symbol)}
       />}
     </span>
