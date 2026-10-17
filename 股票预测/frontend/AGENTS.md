@@ -2,7 +2,7 @@
 
 尽可能减少输出内容，专注做事。
 
-UI/product work now happens on `main`: the product branch `codex/ui-preview-ff7fd40d` was merged into `main` on 2026-10-17 at `b41889b` and is retired (do not develop on it). Its history starts at source commit `400a2cdd4d441e2a302d23feb8380c64b69e30b2` (Preview ff7fd40d). Read `docs/version-isolation-2026-09-30.md` before release work.
+UI/product work uses isolated feature branches based on `origin/main`, which is the integration line. The product branch `codex/ui-preview-ff7fd40d` (source commit `b41889b`) was merged into `main` on 2026-10-17 by merge commit `3e3dd7f` and is retired (do not develop on it). Its history starts at source commit `400a2cdd4d441e2a302d23feb8380c64b69e30b2` (Preview ff7fd40d). Read `docs/version-isolation-2026-09-30.md` before release work.
 
 Authentication/password development is frozen. Preserve existing deployed password, OAuth, session, administrator authorization, account isolation and Production configuration. Do not merge/cherry-pick `codex/auth-admin-frozen-20260930` or copy files/build output from the original dirty checkout. A separate explicit user instruction is required to reopen auth work.
 
