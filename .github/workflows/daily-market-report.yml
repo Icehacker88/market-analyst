@@ -24,6 +24,8 @@ jobs:
   daily-report:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Holds LEDGER_DEPLOY_KEY; the environment only allows main.
+    environment: ledger
     defaults:
       run:
         working-directory: 股票预测
@@ -102,6 +104,10 @@ jobs:
       - name: Checkout
         if: steps.dedupe.outputs.skip != 'true'
         uses: actions/checkout@v6
+        with:
+          # The ledger push below uses this write deploy key, the only actor
+          # allowed to bypass the main ruleset's pull request requirement.
+          ssh-key: ${{ secrets.LEDGER_DEPLOY_KEY }}
 
       - name: Set up Python
         if: steps.dedupe.outputs.skip != 'true'
