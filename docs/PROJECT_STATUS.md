@@ -83,3 +83,7 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 3. 明确核心资产持续数据生产，再做 Production 发布与兼容回滚演练。
 
 只同步明确提交的成果。原 main 工作区的未提交内容、冻结旧认证分支、QA 输出、secret、真实账号和私人数据均不纳入本轮同步。合并与部署需另行授权。
+
+## 2026-10-17 Codex 模型后续任务：离线诊断待审阅
+
+[PR #12](https://github.com/Icehacker88/market-analyst/pull/12) 认领并完成 MODEL-SAFE-MODE、LEDGER-ARIMA-BIAS 的第一轮离线诊断，见[报告](diagnostics/model-followup-2026-10-17.md)。固定维护源 9340248 与 Python/账本 38ad853，使用既有历史导出，不调用生产 API。主要发现是预测时间资格待核验、ARIMA 的 CV 目标对齐和验证方式问题、holdout 参与选模；未证明 Safe Mode 组合符号反转或 Router 同期一定更优。任务处于 review，实际模型修复未实施。没有修改生产逻辑、账本、配置或部署；当前发布版本不因此改变。
