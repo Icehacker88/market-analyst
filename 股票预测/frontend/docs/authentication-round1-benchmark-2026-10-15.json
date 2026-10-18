@@ -1,0 +1,88 @@
+{
+  "capturedAt": "2026-10-15T06:21:58.768Z",
+  "runtime": {
+    "miniflare": "4.20260630.0",
+    "workerd": "1.20260630.1",
+    "node": "v26.0.0",
+    "arch": "arm64",
+    "compatibilityDate": "2026-07-01"
+  },
+  "library": "2.4.0",
+  "scheme": "PBKDF2-HMAC-SHA256",
+  "iterations": 600000,
+  "saltBytes": 16,
+  "derivedBytes": 32,
+  "probes": {
+    "argon": {
+      "supported": false,
+      "error": "WebAssembly.compile(): Wasm code generation disallowed by embedder"
+    },
+    "native210000": {
+      "supported": true
+    },
+    "native600000": {
+      "supported": true
+    }
+  },
+  "correctness": {
+    "correct": true,
+    "wrongRejected": true,
+    "uniqueSalt": true
+  },
+  "coldMs": 570.1414579999998,
+  "sequential": {
+    "count": 5,
+    "concurrency": 1,
+    "totalMs": 2807.014333,
+    "requestMs": [
+      539.961292,
+      545.3784580000001,
+      563.6679999999997,
+      543.3310410000004,
+      614.6458330000005
+    ]
+  },
+  "concurrent": {
+    "count": 4,
+    "concurrency": 4,
+    "totalMs": 2197.3074589999997,
+    "requestMs": [
+      554.9574999999995,
+      2197.252124999999,
+      2197.277249999999,
+      2197.2984160000005
+    ]
+  },
+  "measurements": {
+    "localV8NonIdleSampleMs": 2832.082,
+    "perHashSampleMs": 566.4164,
+    "profiled": {
+      "count": 5,
+      "concurrency": 1,
+      "totalMs": 2834.5975419999995,
+      "requestMs": [
+        577.2798749999984,
+        563.1004159999993,
+        565.6005000000005,
+        565.728000000001,
+        562.8782919999994
+      ]
+    },
+    "heapBefore": {
+      "usedSize": 900652,
+      "totalSize": 3932160,
+      "embedderHeapUsedSize": 257936,
+      "backingStorageSize": 8089
+    },
+    "heapAfter": {
+      "usedSize": 1111288,
+      "totalSize": 4194304,
+      "embedderHeapUsedSize": 257936,
+      "backingStorageSize": 9929
+    },
+    "limits": "Sampling estimate and retained JS heap only; not hosted billed CPU, peak isolate memory, or a Cloudflare quota guarantee."
+  },
+  "kdfBundleBytes": 10350,
+  "kdfBundleGzipBytes": 4340,
+  "hostedCPU": null
+}

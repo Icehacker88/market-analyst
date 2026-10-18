@@ -228,21 +228,21 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   return (await request<{ data: AuthUser | null }>("/api/auth/me")).data;
 }
 
-export async function getAuthConfig(): Promise<{ googleEnabled: boolean; appleEnabled: boolean; signupEnabled: boolean }> {
-  return (await request<{ data: { googleEnabled: boolean; appleEnabled: boolean; signupEnabled: boolean } }>("/api/auth/config")).data;
+export async function getAuthConfig(): Promise<{ googleEnabled: boolean; appleEnabled: boolean; signupEnabled: boolean; passwordEnabled?: boolean; turnstileSiteKey?: string | null }> {
+  return (await request<{ data: { googleEnabled: boolean; appleEnabled: boolean; signupEnabled: boolean; passwordEnabled?: boolean; turnstileSiteKey?: string | null } }>("/api/auth/config")).data;
 }
 
-export async function loginWithEmailApi(email: string, password: string): Promise<AuthSession> {
+export async function loginWithEmailApi(email: string, password: string, challengeToken?: string): Promise<AuthSession> {
   return (await request<{ data: AuthSession }>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, challengeToken }),
   })).data;
 }
 
-export async function signupWithEmailApi(email: string, password: string, name: string): Promise<AuthSession> {
+export async function signupWithEmailApi(email: string, password: string, name: string, challengeToken?: string): Promise<AuthSession> {
   return (await request<{ data: AuthSession }>("/api/auth/signup", {
     method: "POST",
-    body: JSON.stringify({ email, password, name }),
+    body: JSON.stringify({ email, password, name, challengeToken }),
   })).data;
 }
 

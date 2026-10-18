@@ -7,7 +7,7 @@ const outputPath = path.join(root, "functions/api/[[path]].ts");
 
 const prefix = `type CloudflareKV = {
   get: (key: string, options?: "text" | "json" | "arrayBuffer" | { type?: "text" | "json" | "arrayBuffer" }) => Promise<unknown>;
-  put: (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream) => Promise<void>;
+  put: (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream, options?: { expirationTtl?: number }) => Promise<void>;
   delete: (key: string) => Promise<void>;
   list: (options?: { prefix?: string; cursor?: string; limit?: number }) => Promise<{ keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }>;
 };
@@ -23,6 +23,10 @@ type CloudflareEnv = {
   GEMINI_MODEL?: string;
   ORIVANE_AI_DAILY_LIMIT?: string;
   ORIVANE_ADMIN_EMAILS?: string;
+  ORIVANE_PASSWORD_AUTH_ENABLED?: string;
+  ORIVANE_PASSWORD_SIGNUP_ENABLED?: string;
+  ORIVANE_TURNSTILE_SITE_KEY?: string;
+  ORIVANE_TURNSTILE_SECRET_KEY?: string;
   ORIVANE_MARKET_DATA_PROVIDER?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -61,7 +65,7 @@ function cloudflareDependencies(env: CloudflareEnv): ApiDependencies {
     return {
       get: (key, options) => kv.get(key, options?.type || "text"),
       set: (key, value) => kv.put(key, value),
-      setJSON: (key, value) => kv.put(key, JSON.stringify(value)),
+      setJSON: (key, value) => kv.put(key, JSON.stringify(value), key.startsWith("auth/attempts/") ? { expirationTtl: 900 } : undefined),
       delete: (key) => kv.delete(key),
       list: async (options) => {
         const result = await kv.list({ prefix: options?.prefix, limit: 1000 });
@@ -88,6 +92,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
 
 let source = await readFile(sourcePath, "utf8");
 const replacements = [
+  ['from "./_shared/password"', 'from "../../netlify/functions/_shared/password"'],
   ['import type { Config, Context } from "@netlify/functions";\n', ""],
   ['import { getDeployStore, getStore } from "@netlify/blobs";\n', ""],
   ['import publicData from "./data/public-data.json" with { type: "json" };', 'import publicData from "../../netlify/functions/data/public-data.json" with { type: "json" };'],
