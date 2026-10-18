@@ -44,6 +44,18 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      # The same build a Cloudflare Pages deploy runs, minus the SEO refresh that
+      # calls the live forecast API. A green build is not a deployment.
+      - name: Cloudflare build
+        env:
+          ORIVANE_SKIP_SEO_REFRESH: "1"
+        run: npm run build:cloudflare
+
+      - name: Build leaves the checkout clean
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 20
