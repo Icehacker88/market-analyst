@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 产品主线 | `main`（2026-10-17 由 [PR #15](https://github.com/Icehacker88/market-analyst/pull/15) 合并 `codex/ui-preview-ff7fd40d` @ `b41889b`，合并提交 `3e3dd7f`） | 合并后 `main` 的前端应用源码、API 维护源、Worker 生成器、依赖和配置都与 Production 部署 `0b78f7aa` 的来源 `b41889b` 一致，只有 `股票预测/frontend/AGENTS.md` 文档不同。首页、My Research、Research Record、Research Review、Core User Journey Polish 已获用户 Preview 验收；周期涨跌幅、logo 底纹、建议价位三项修复已上线 |
 | 原产品分支（已退役） | [`codex/ui-preview-ff7fd40d`](https://github.com/Icehacker88/market-analyst/tree/codex/ui-preview-ff7fd40d) · `b41889b9dd7988bfba421ccc32ca8d9af47dfba1` | 保留作历史，不再在上面开发或提 PR。此前 Preview 验收版本为 `aee719e` |
-| Authentication Round 1 | [`codex/authentication-round1`](https://github.com/Icehacker88/market-analyst/tree/codex/authentication-round1)；原实现 `75289a7`，2026-10-17 合并 main `b71c3b1` | AUTH-REBASE-MAIN 本地更新完成、待 PR 交叉审阅；56 文件 / 361 项测试、typecheck、Cloudflare build 通过。认证实现和配置未因本次整合改变；未部署或启用入口。见[验证报告](auth-rebase-main-2026-10-17.md) |
+| Authentication Round 1 | 已于 2026-10-18 由 [PR #17](https://github.com/Icehacker88/market-analyst/pull/17) 合入 `main`（合并提交 `d3dff8a`；原实现 `75289a7`） | 代码在 main 上，但**密码入口默认关闭**：只有设置 `ORIVANE_PASSWORD_AUTH_ENABLED=true` 并配置 Turnstile 两个密钥后才会开启，目前任何环境都没有设置。Claude 审阅 approve；本地 56 个文件 / 361 项测试、typecheck、build 通过。开启前需要 Workers Paid、隔离的 Turnstile 和 Preview 验收，并经用户单独授权。见[验证报告](auth-rebase-main-2026-10-17.md) |
 
 不得从原 main 工作区（有未提交改动）构建产品；不得合并或 cherry-pick `codex/auth-admin-frozen-20260930`。
 
@@ -41,6 +41,7 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
 - 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
 - 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
+- **下一次从 main 部署时的认证变化（用户 2026-10-18 已接受）**：正式环境目前仍是 `0b78f7aa`（来源 `b41889b`，不含认证第一轮）。下一次从合入 PR #17 之后的 main 部署，会同时带上认证第一轮：密码登录和注册入口关闭，`/api/auth/login|signup` 返回 503；`/auth/logout` 改为要求同源，撤销失败时不再假装退出成功；Google 登录不变。按 Preview 报告推断，旧代码在托管 Workers 上的密码功能本来就返回 500。**部署后的检查清单加一项**：`/api/auth/config` 应返回 `passwordEnabled: false`、`signupEnabled: false`，并确认 Google 登录入口正常。
 - **Production 当前版本（2026-10-17 第二次发布，用户授权）**：部署 `0b78f7aa-46c1-4414-a8de-78c77099382d`，来源产品分支 `b41889b`（在 `9340248` 基础上加入 PR #10 建议价位修复，只改前端 4 个文件，配置未变）。**回滚目标**改为 `ee3eefb7-148c-4e86-80e1-49fa3e81bba4`（来源 `9340248`），操作方法同下；更早的 `2bf56aeb` 仍可作为第二回滚点。部署后检查：主要页面和接口均为 200；NVDA 的三块建议统一使用下方 207.95、上方 239.24；涨跌幅正常；logo 无占位图标；控制台无错误。PR #10、#11 按用户指示在 Codex 复核修订之前合并，修订内容尚未经 Codex 确认。
 - **Production 已于 2026-10-17 更新**（用户授权）：部署 `ee3eefb7-148c-4e86-80e1-49fa3e81bba4`，来源产品分支 `9340248`（干净工作树，`ORIVANE_SKIP_SEO_REFRESH=1 npm run build:cloudflare`，`wrangler pages deploy out --branch=main`；未部署 optimizer）。生产配置（wrangler.toml 顶层变量和 6 个 KV）与上次部署一致，Secrets 未改动。**回滚目标**：上一版 Production 部署 `2bf56aeb-0e72-4c19-8cb5-f4926cd25725`（来源 `a404860`，dirty 构建），在 Cloudflare Pages → Deployments 中选它，然后点 "Rollback to this deployment"。回滚不会丢用户数据：旧前端用 PATCH 保存，服务端会保留新版本写入的字段。部署后检查：主要页面和接口均为 200；NVDA 1D–1Y 涨跌幅与 `/api/market/returns` 一致；logo 无占位图标；手机首页不溢出；Kronos 端点行为与旧版一致；控制台无错误。已知差异：5Y/10Y/MAX 取自另一份缓存的全历史，与服务端结果可能相差约 1%，旧版同样如此。SEO 预测快照这次未刷新，沿用已提交版本。
 - 2026-10-15 上线审计发现 optimizer 35 个资产全部失败（503 与超时），同日 Kronos 上传 67 个结果；二者不同存储/生产路径，不能互相当作完整覆盖证明。这是昨日证据，本次没有触发生产任务或复测性能。
