@@ -1,5 +1,6 @@
 "use client";
 
+import { AuthChallenge } from "./auth-challenge";
 import { ApiError } from "@/lib/api";
 import { LoaderCircle, LogIn, LogOut, Trash2, UserRound, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -18,6 +19,8 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     googleEnabled,
     appleEnabled,
     signupEnabled,
+    passwordEnabled,
+    turnstileSiteKey,
     callbackMessage,
     clearCallbackMessage,
     loginWithEmail,
@@ -29,6 +32,8 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   } = useAuth();
   const [mode, setMode] = useState<Mode>("login");
   const [busy, setBusy] = useState(false);
+  const [challengeToken, setChallengeToken] = useState("");
+  const [challengeAttempt, setChallengeAttempt] = useState(0);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const modalRef = useRef<HTMLElement>(null);
@@ -75,6 +80,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!passwordEnabled || !challengeToken || (mode === "signup" && !signupEnabled)) return;
     setBusy(true);
     setError("");
     setSuccess("");
@@ -84,17 +90,21 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     const name = String(fields.get("name") || "").trim();
     try {
       if (mode === "login") {
-        await loginWithEmail(email, password);
+        await loginWithEmail(email, password, challengeToken);
         onClose();
       } else {
-        const created = await signupWithEmail(email, password, name);
-        if (created.confirmedAt) onClose();
-        else setSuccess(t("checkEmail"));
+        await signupWithEmail(email, password, name, challengeToken);
+        onClose();
       }
     } catch (cause) {
       const status = cause instanceof ApiError ? cause.status : undefined;
-      setError(status === 401 ? t("invalidLogin") : status === 403 ? t("signupDisabled") : status === 422 ? t("invalidSignup") : t("authError"));
+      setError(status === 401 ? t("invalidLogin")
+        : status === 429 ? (language === "zh" ? "尝试过于频繁，请 15 分钟后重试。" : "Too many attempts. Try again in 15 minutes.")
+        : status === 422 ? (language === "zh" ? "请检查邮箱和密码。新密码至少 15 个字符。" : "Check your email and password. New passwords require at least 15 characters.")
+        : status === 403 ? (language === "zh" ? "请重新完成安全验证。" : "Please complete the security check again.") : t("authError"));
     } finally {
+      setChallengeToken("");
+      setChallengeAttempt(n => n + 1);
       setBusy(false);
     }
   }
@@ -104,6 +114,8 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     try {
       await signOut();
       onClose();
+    } catch {
+      setError(language === "zh" ? "未能确认退出，请重试。" : "Sign out could not be confirmed. Please retry.");
     } finally {
       setBusy(false);
     }
@@ -136,13 +148,15 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         {error && <p className="auth-message error">{error}</p>}
       </div> : !configured ? <div className="auth-unavailable"><strong>{t("authUnavailable")}</strong><p>{t("authUnavailableBody")}</p></div> : <>
         <div className="auth-modes"><button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); setSuccess(""); }}>{t("login")}</button><button className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setError(""); setSuccess(""); }} disabled={!signupEnabled}>{t("createAccount")}</button></div>
+        {!passwordEnabled && <p role="status">{language === "zh" ? "邮箱密码登录暂未开放。" : "Email and password sign-in is not enabled yet."}</p>}
         <form className="auth-form" onSubmit={submit}>
           {mode === "signup" && <label>{t("name")}<input name="name" autoComplete="name" placeholder={language === "zh" ? "你的名字" : "Your name"} /></label>}
           <label>{t("email")}<input name="email" type="email" autoComplete="email" required placeholder="name@example.com" /></label>
-          <label>{t("password")}<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} required placeholder={t("passwordHint")} /></label>
+          <label>{t("password")}<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={mode === "signup" ? 15 : 1} maxLength={4096} required placeholder={mode === "signup" ? (language === "zh" ? "至少 15 个字符" : "At least 15 characters") : t("passwordHint")} /></label>
+          {open && passwordEnabled && turnstileSiteKey && <AuthChallenge key={`${mode}:${challengeAttempt}`} siteKey={turnstileSiteKey} action={mode} onToken={setChallengeToken} language={language} />}
           {error && <p className="auth-message error">{error}</p>}
           {success && <p className="auth-message success">{success}</p>}
-          <button className="auth-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <LogIn size={15} />}{mode === "login" ? t("login") : t("createAccount")}</button>
+          <button className="auth-primary" type="submit" disabled={busy || !passwordEnabled || !challengeToken || (mode === "signup" && !signupEnabled)}>{busy ? <LoaderCircle className="spin" size={15} /> : <LogIn size={15} />}{mode === "login" ? t("login") : t("createAccount")}</button>
         </form>
         {googleEnabled && <>
           <div className="auth-divider"><span>{t("or")}</span></div>
