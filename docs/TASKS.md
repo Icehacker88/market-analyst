@@ -36,6 +36,7 @@ Keep this board concise. Update the owner, status, branch/PR, scope, paths, evid
 
 ## 2026-10-19 时间资格第一阶段实现交接
 
-| Task | Scope | Owner | Status | Branch / PR | Changed paths / checks | Next action |
-|---|---|---|---|---|---|---|
-| FORECAST-TIME-PHASE1 | Python 账本/日报与 Cloud 结算/治理使用时间资格及不可变快照；保留历史原值、不回填 | Codex | review | `codex/forecast-time-phase1-20261019`；证据 [PR #20](https://github.com/Icehacker88/market-analyst/pull/20) | `股票预测/src/{forecast_eligibility,prediction_ledger,data_loader,daily_report}.py`、`contracts/`、frontend `api.mts`/共享资格模块/Worker 生成器、对应测试；[接口及验证交接](forecast-time-phase1-2026-10-19.md) | Claude Code 交叉审阅实现 PR，并按字段契约另行调整战绩页；合并、部署另行授权。证据 PR 的 in_progress 记录由本交接推进为 review，合并时保留一个任务状态 |
+| ID | Task | Owner | Status | Branch / PR | Scope and changed paths | Checks / evidence | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FORECAST-TIME-PHASE1 | 时间资格与不可变预测快照；保留历史原值、不回填 | Codex | review | [实现 PR #21](https://github.com/Icehacker88/market-analyst/pull/21) · `codex/forecast-time-phase1-20261019`；[证据 PR #20](https://github.com/Icehacker88/market-analyst/pull/20) 已合并；已同步 main `b4ddc9a` | Python `src/{forecast_eligibility,prediction_ledger,data_loader,daily_report}.py`、`contracts/`、frontend `api.mts`/共享资格模块/Worker 生成器及对应测试；不调模型、不改生产账本/配置、不部署 | [核验报告](diagnostics/orivane-time-audit-2026-10-18/报告.md)：46 条晚生成；证据 notebook 离线复跑一致；[接口及验证交接](forecast-time-phase1-2026-10-19.md) | Claude Code 交叉审阅 PR #21，并按字段契约另行调整战绩页；合并、部署另行授权 |
+

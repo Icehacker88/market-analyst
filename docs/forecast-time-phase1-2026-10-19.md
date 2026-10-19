@@ -2,6 +2,7 @@
 
 - Task: `FORECAST-TIME-PHASE1`; Owner: Codex; reviewer: Claude Code; status: review.
 - Base: `origin/main` `623a1edd4f5adb770f5b2d09a83716c344166117`.
+- Conflict sync: merged main `b4ddc9a` after evidence PR #20 landed; only TASKS collided. Evidence is retained; Phase 1 has one task entry in review; application code remains byte-identical to `3df23fd`.
 - Independent branch: `codex/forecast-time-phase1-20261019`; worktree: `~/.codex/worktrees/orivane-time-phase1/Market Analysis`.
 - Evidence-only [PR #20](https://github.com/Icehacker88/market-analyst/pull/20) is separate. This branch does not copy its report bundle or require its merge to build.
 - Local implementation only. No production API, ledger migration, workflow dispatch, Preview/Production deployment or configuration change.
@@ -73,7 +74,7 @@ Statistics KV keys and the scoreboard edge-cache key are versioned so pre-fix sc
 
 ## Review / release order
 
-Claude Code reviews timing boundaries, snapshot immutability, arithmetic-vs-log distinction, partial storage failure, API compatibility and conservative governance. The evidence PR can merge independently; implementation does not change old evidence. Resolve the TASKS entry to one task after both PRs merge (evidence says in progress; this handoff says review).
+Claude Code reviews timing boundaries, snapshot immutability, arithmetic-vs-log distinction, partial storage failure, API compatibility and conservative governance. The evidence PR can merge independently; implementation does not change old evidence. After evidence PR #20 merged, TASKS was reconciled to one review entry linking both PRs.
 
 Before any deployment: adapt track-record UI to the field meanings above; show unknown/excluded and null scores; verify isolated Preview with separately authorized synthetic data and hosted resource measurements. Expect qualified live sample counts to drop, potentially to zero. This is an integrity correction, not a measured model performance gain.
 

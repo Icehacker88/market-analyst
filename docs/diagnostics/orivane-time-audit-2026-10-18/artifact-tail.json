@@ -1,0 +1,72 @@
+[
+  {
+    "run_id": "33823899221",
+    "asset": "NDX",
+    "input_last_date": "2026-09-03",
+    "input_last_price": 29482.3203125,
+    "artifact_file": "20260904_085853/model_runs/NDX/20260904_005853/cleaned_prices.csv"
+  },
+  {
+    "run_id": "33823899221",
+    "asset": "QQQ",
+    "input_last_date": "2026-09-02",
+    "input_last_price": 709.239990234375,
+    "artifact_file": "20260904_085853/model_runs/QQQ/20260904_005912/cleaned_prices.csv"
+  },
+  {
+    "run_id": "33823899221",
+    "asset": "SPY",
+    "input_last_date": "2026-09-02",
+    "input_last_price": 765.1599731445312,
+    "artifact_file": "20260904_085853/model_runs/SPY/20260904_005903/cleaned_prices.csv"
+  },
+  {
+    "run_id": "33823899221",
+    "asset": "USDCNY_X",
+    "input_last_date": "2026-09-04",
+    "input_last_price": 6.717599868774414,
+    "artifact_file": "20260904_085853/model_runs/USDCNY_X/20260904_005931/cleaned_prices.csv"
+  },
+  {
+    "run_id": "33823899221",
+    "asset": "VIX",
+    "input_last_date": "2026-09-03",
+    "input_last_price": 14.319999694824219,
+    "artifact_file": "20260904_085853/model_runs/VIX/20260904_005921/cleaned_prices.csv"
+  },
+  {
+    "run_id": "36208754559",
+    "asset": "NDX",
+    "input_last_date": "2026-09-25",
+    "input_last_price": 30608.134765625,
+    "artifact_file": "20260926_093237/model_runs/NDX/20260926_013237/cleaned_prices.csv"
+  },
+  {
+    "run_id": "36208754559",
+    "asset": "QQQ",
+    "input_last_date": "2026-09-24",
+    "input_last_price": 741.0999755859375,
+    "artifact_file": "20260926_093237/model_runs/QQQ/20260926_013249/cleaned_prices.csv"
+  },
+  {
+    "run_id": "36208754559",
+    "asset": "SPY",
+    "input_last_date": "2026-09-24",
+    "input_last_price": 767.1799926757812,
+    "artifact_file": "20260926_093237/model_runs/SPY/20260926_013243/cleaned_prices.csv"
+  },
+  {
+    "run_id": "36208754559",
+    "asset": "USDCNY_X",
+    "input_last_date": "2026-09-25",
+    "input_last_price": 6.712299823760986,
+    "artifact_file": "20260926_093237/model_runs/USDCNY_X/20260926_013300/cleaned_prices.csv"
+  },
+  {
+    "run_id": "36208754559",
+    "asset": "VIX",
+    "input_last_date": "2026-09-25",
+    "input_last_price": 14.869999885559082,
+    "artifact_file": "20260926_093237/model_runs/VIX/20260926_013254/cleaned_prices.csv"
+  }
+]
