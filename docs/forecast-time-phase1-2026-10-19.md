@@ -17,6 +17,8 @@ The source retrieval timestamp must be at least 15 minutes after the base close 
 
 Snapshots fix symbol, base date/price, price basis, source, source retrieval time, actual generation completion, freeze time, protocol/calendar version and target sessions. Price revisions, mixed source/basis, missing exact targets or unfinished sessions block settlement. Settled outcomes/evidence are never recomputed. Python retains its existing log-return / 5D volatility definition; Cloud retains arithmetic horizon returns. They must not be pooled as identical return measures.
 
+**Price basis (Claude Code follow-up, 2026-10-19):** live freeze and settlement use the unadjusted `Close` (`price_basis="Close"`), not `Adj Close`. Yahoo rewrites every past `Adj Close` at each ex-dividend date, so a frozen adjusted base would stop matching and the record would never settle; for quarterly payers (SPY, QQQ, NVDA) that would strand roughly a third of 1M windows and bias the sample toward windows without an ex-dividend date. `Close` is rewritten only by splits, which still block settlement. Live scores are therefore price returns: on an ex-dividend day they omit that dividend (about 0.3% for SPY). Models still train and forecast on the adjusted series. Snapshots with any other basis are `unknown` (`price_provenance_missing`).
+
 ## Public API contract (for Claude Code's track-record UI)
 
 Existing routes and response envelopes stay intact; fields are additive except tightened meanings of `Verified`, completed counts, accuracy and governance. Paths below have the normal `/api` prefix when served on Pages.

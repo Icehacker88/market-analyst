@@ -15,7 +15,7 @@ function row() {
   return { Ticker: "SPY", As_Of_Date: "2026-09-02", Created_At: generated, Evaluation_Snapshot: { ...snapshot, frozen_at: generated }, Forecast_1D_Return: .01, Action_Signal: "Up" };
 }
 const future = [{ Date: "2026-09-03", Price: 110, "Adj Close": 110, Close: 110 }];
-const provenance = { source: "yahoo", price_basis: "Adj Close", source_observed_at: "2026-09-03T20:30:00Z" };
+const provenance = { source: "yahoo", price_basis: "Close", source_observed_at: "2026-09-03T20:30:00Z" };
 let worker: Miniflare;
 async function call(operation: string, payload: Record<string, unknown> = {}) {
   const response = await worker.dispatchFetch("https://local.test/probe", { method: "POST", body: JSON.stringify({ operation, ...payload }) });
@@ -67,7 +67,7 @@ describe("frozen forecast timing contract", () => {
     expect(qualifyForecast(row(), "1D", now).status).toBe("eligible");
     for (const [key, value, state] of [
       ["frozen_at", "2026-09-03T13:30:00Z", "ineligible"], ["source_observed_at", "2026-09-02T19:59:59Z", "ineligible"],
-      ["frozen_at", null, "unknown"], ["symbol", "QQQ", "unknown"], ["price_basis", "NAV", "unknown"],
+      ["frozen_at", null, "unknown"], ["symbol", "QQQ", "unknown"], ["price_basis", "NAV", "unknown"], ["price_basis", "Adj Close", "unknown"],
       ["target_sessions", null, "unknown"], ["source_observed_at", "2026-09-02T21:30:00Z", "unknown"],
     ] as const) {
       const r = row(); Object.assign(r.Evaluation_Snapshot, { [key]: value });
@@ -89,11 +89,21 @@ describe("frozen forecast timing contract", () => {
       [{ base: 105 }, "base_price_revised"], [{ future: [{ ...future[0], Date: "2026-09-04" }] }, "target_data_missing"],
       [{ provenance: { ...provenance, source: "stooq" } }, "price_provenance_mismatch"],
       [{ provenance: { ...provenance, source_observed_at: "2026-09-03T19:00:00Z" } }, "target_data_unconfirmed"],
-      [{ provenance: { ...provenance, price_basis: "Close" } }, "price_provenance_mismatch"],
+      [{ provenance: { ...provenance, price_basis: "Adj Close" } }, "price_provenance_mismatch"],
     ] as const) {
       const bad = await call("settle", { row: r, future, provenance, now, ...extra });
       expect(bad.data.Actual_1D_Return).toBeUndefined(); expect(bad.data.Settlement_Status["1D"]).toBe(reason);
     }
+  });
+  it("freezes and settles on the unadjusted Close so ex-dividend Adj Close rewrites cannot strand a record", async () => {
+    const snapshot = makeEvaluationSnapshot({ symbol: "SPY" }, { Date: "2026-09-02", Price: 98.5, "Adj Close": 98.5, Close: 100 }, "yahoo", "2026-09-02T20:30:00Z", "2026-09-02T21:00:00Z");
+    expect([snapshot.price_basis, snapshot.base_price]).toEqual(["Close", 100]);
+    // Ex-dividend on the target day: the adjusted series differs from Close, settlement still uses Close.
+    const dividendDay = [{ Date: "2026-09-03", Price: 109.67, "Adj Close": 109.67, Close: 110 }];
+    const { data } = await call("settle", { row: row(), future: dividendDay, provenance, now });
+    expect(data.Actual_1D_Return).toBeCloseTo(.1);
+    expect(data.Outcome_Evidence["1D"]).toMatchObject({ price_basis: "Close", base_price: 100, actual_price: 110 });
+    expect(outcomeEligible(data, "1D", now)).toBe(true);
   });
   it("legacy reads do not fetch history, write, backfill, or count observed outcomes as qualified", async () => {
     const legacy = { ...row(), Evaluation_Snapshot: null, Actual_1D_Return: .1, Raw_Direction_Correct: 1, Actual_1D_Date: "2026-09-03", Backtest: true };

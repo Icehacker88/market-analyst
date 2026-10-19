@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from src.data_loader import download_yahoo_chart
-from src.forecast_eligibility import make_snapshot, qualify
+from src.forecast_eligibility import SETTLEMENT_BASIS, make_snapshot, qualify
 from src.preprocessing import clean_price_data
 from src.emailer import send_report_email
 from src.email_report import write_html_daily_report
@@ -17,7 +17,7 @@ from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_fra
 from src.models import actionable_signal, classify_signal_quality
 from src.news import NEWS_KEYWORDS, fetch_recent_news, save_news
 from src.pipeline import _run_frame
-from src.prediction_ledger import build_latest_1d_validation, update_prediction_ledger
+from src.prediction_ledger import build_latest_1d_validation, settlement_closes, update_prediction_ledger
 
 
 def run_daily_report(
@@ -54,7 +54,7 @@ def run_daily_report(
             checked_at = datetime.now(ZoneInfo("UTC")).isoformat()
             as_of = str(quality.end_date)
             readiness = qualify({"Ticker": ticker, "As_Of_Date": as_of, "Created_At": checked_at,
-                "Evaluation_Snapshot": make_snapshot(ticker, as_of, float(cleaned["Price"].iloc[-1]), quality.price_column,
+                "Evaluation_Snapshot": make_snapshot(ticker, as_of, float(settlement_closes(cleaned).get(as_of, 0.0)), SETTLEMENT_BASIS,
                     "yahoo", market_provenance[ticker]["observed_at"], checked_at, checked_at)})
             if readiness["status"] == "ineligible":
                 raise ValueError("Prediction time not eligible: " + readiness["reason"])
