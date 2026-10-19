@@ -4,7 +4,7 @@ No inference of historical publication time, no network or ledger writes.
 Only reviewed US equity sessions qualify; indices/FX/other markets stay unknown.
 Live freeze and settlement use the unadjusted Close: Adj Close is rewritten for every
 past day at each ex-dividend date, so a frozen Adj Close base would never match again.
-Scores are therefore price returns; on an ex-dividend day they omit that dividend.
+Scores are therefore price returns: any window that spans an ex-dividend date omits that dividend.
 """
 from __future__ import annotations
 

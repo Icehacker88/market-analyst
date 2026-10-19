@@ -4,7 +4,7 @@ export const TIMING_PROTOCOL = "frozen-close-v1";
 export const HORIZON_DAYS: Record<string, number> = { "1D": 1, "5D": 5, "10D": 10, "1M": 22 };
 // Live freeze/settlement basis. Adj Close rewrites every past day at each ex-dividend date,
 // so a frozen Adj Close base would never match again; Close only changes on splits.
-// Live scores are therefore price returns that omit the dividend on an ex-dividend day.
+// Live scores are therefore price returns: any window that spans an ex-dividend date omits that dividend.
 export const SETTLEMENT_BASIS = "Close";
 type Row = Record<string, unknown>;
 export type Qualification = { status: "eligible" | "ineligible" | "unknown"; reason: string; protocol: string };
