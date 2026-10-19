@@ -33,3 +33,9 @@ Keep this board concise. Update the owner, status, branch/PR, scope, paths, evid
 | MERGE-PRODUCT-MAIN | 把已验收的产品分支合进 main，让 main 成为唯一产品主线（PR 自动测试和分支保护从此覆盖产品代码） | Claude Code | done | [PR #15](https://github.com/Icehacker88/market-analyst/pull/15) · 合并 `3e3dd7f` | 合并提交 + 过时说明（`AGENTS.md`、`CLAUDE.md`、`docs/ARCHITECTURE.md`、`docs/PROJECT_STATUS.md`、`股票预测/frontend/AGENTS.md`） | 无冲突；Codex approve；合并后应用源码与 Production 来源 `b41889b` 一致，只有 `frontend/AGENTS.md` 文档不同；PR Checks 首次在完整产品代码上通过（53 个文件 / 324 项，Python 22 项，backend 7 项） | 新任务 AUTH-REBASE-MAIN |
 | AUTH-REBASE-MAIN | 将既有认证分支同步到最新 main，保留产品修复 | Codex | done | [PR #17](https://github.com/Icehacker88/market-analyst/pull/17) · 合并 `d3dff8a` | 合并 main `b71c3b1`；仅手动协调 frontend/AGENTS.md 并更新交接文档，不改认证实现或配置 | 2026-10-17：56 文件 / 361 项前端测试、typecheck、Cloudflare build 通过；16 个原认证文件逐字节保留，main 产品修复完整保留；详见 [报告](auth-rebase-main-2026-10-17.md) | 已合入 main，未部署。下次从 main 部署时密码入口会关闭（用户已接受）；开启密码登录需另行授权并完成 Preview 验收 |
 | CI-CLOUDFLARE-BUILD | PR Checks 增加 Cloudflare 完整构建（跳过 SEO 刷新），并检查构建后工作区干净 | Claude Code | done | [PR #18](https://github.com/Icehacker88/market-analyst/pull/18) · 合并 `ebd9b97` | `.github/workflows/pr-checks.yml`（frontend job 新增 2 步） | Codex approve；GitHub CI 实际运行：Cloudflare build（113 个页面）和工作区检查通过，包含认证代码的 main 上也通过；frontend job 约 1–2 分钟 | 已完成；构建通过不等于已部署 |
+
+## 2026-10-19 时间资格修复
+
+| ID | Task | Owner | Status | Branch / PR | Scope and changed paths | Checks / evidence | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FORECAST-TIME-PHASE1 | 时间资格与不可变预测快照 | Codex | in_progress | `codex/forecast-time-phase1-20261019`（基于 main `623a1ed`；证据 PR `codex/time-audit-evidence-20261019`） | Python 账本/日报、api.mts 结算/治理及测试；不调模型、不改生产账本/配置、不部署 | [核验报告](diagnostics/orivane-time-audit-2026-10-18/报告.md)：46 条晚生成；证据 notebook 离线复跑一致 | 独立实现 PR，列出接口字段变化；Claude Code 交叉审阅，部署另行授权 |
