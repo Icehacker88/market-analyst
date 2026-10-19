@@ -1,0 +1,278 @@
+[
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-10-12",
+    "Created_At": "2026-10-14T00:45:27.477Z",
+    "Actual_1D_Date": "2026-10-13"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-10-12",
+    "Created_At": "2026-10-14T00:45:25.774Z",
+    "Actual_1D_Date": "2026-10-13"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-15",
+    "Created_At": "2026-10-17T00:16:03.361Z",
+    "Actual_1D_Date": "2026-10-16"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-14",
+    "Created_At": "2026-10-16T00:15:28.549Z",
+    "Actual_1D_Date": "2026-10-15"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-08",
+    "Created_At": "2026-10-10T00:15:34.683Z",
+    "Actual_1D_Date": "2026-10-09"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-06",
+    "Created_At": "2026-10-08T00:15:41.230Z",
+    "Actual_1D_Date": "2026-10-07"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-05",
+    "Created_At": "2026-10-07T00:15:35.391Z",
+    "Actual_1D_Date": "2026-10-06"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-10-01",
+    "Created_At": "2026-10-03T00:15:59.014Z",
+    "Actual_1D_Date": "2026-10-02"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-30",
+    "Created_At": "2026-10-02T00:16:07.711Z",
+    "Actual_1D_Date": "2026-10-01"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-29",
+    "Created_At": "2026-10-01T00:16:01.406Z",
+    "Actual_1D_Date": "2026-09-30"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-28",
+    "Created_At": "2026-09-30T00:16:06.102Z",
+    "Actual_1D_Date": "2026-09-29"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-24",
+    "Created_At": "2026-09-26T00:16:06.144Z",
+    "Actual_1D_Date": "2026-09-25"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-23",
+    "Created_At": "2026-09-25T00:15:59.597Z",
+    "Actual_1D_Date": "2026-09-24"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-22",
+    "Created_At": "2026-09-24T00:16:04.227Z",
+    "Actual_1D_Date": "2026-09-23"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-21",
+    "Created_At": "2026-09-23T00:15:55.857Z",
+    "Actual_1D_Date": "2026-09-22"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-17",
+    "Created_At": "2026-09-19T00:16:04.447Z",
+    "Actual_1D_Date": "2026-09-18"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-16",
+    "Created_At": "2026-09-18T00:16:02.084Z",
+    "Actual_1D_Date": "2026-09-17"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-10",
+    "Created_At": "2026-09-12T00:16:05.878Z",
+    "Actual_1D_Date": "2026-09-11"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-09",
+    "Created_At": "2026-09-11T00:15:44.925Z",
+    "Actual_1D_Date": "2026-09-10"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-08",
+    "Created_At": "2026-09-10T00:15:25.186Z",
+    "Actual_1D_Date": "2026-09-09"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-03",
+    "Created_At": "2026-09-05T00:15:47.146Z",
+    "Actual_1D_Date": "2026-09-04"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-02",
+    "Created_At": "2026-09-04T00:15:46.918Z",
+    "Actual_1D_Date": "2026-09-03"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-02",
+    "Created_At": "2026-09-04T08:58:53.174357+08:00",
+    "Actual_1D_Date": "2026-09-03"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-02",
+    "Created_At": "2026-09-04T08:58:53.174357+08:00",
+    "Actual_1D_Date": "2026-09-03"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-03",
+    "Created_At": "2026-09-05T08:57:00.368135+08:00",
+    "Actual_1D_Date": "2026-09-04"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-03",
+    "Created_At": "2026-09-05T08:57:00.368135+08:00",
+    "Actual_1D_Date": "2026-09-04"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-04",
+    "Created_At": "2026-09-09T09:14:43.651050+08:00",
+    "Actual_1D_Date": "2026-09-08"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-04",
+    "Created_At": "2026-09-09T09:14:43.651050+08:00",
+    "Actual_1D_Date": "2026-09-08"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-08",
+    "Created_At": "2026-09-10T09:03:46.630196+08:00",
+    "Actual_1D_Date": "2026-09-09"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-08",
+    "Created_At": "2026-09-10T09:03:46.630196+08:00",
+    "Actual_1D_Date": "2026-09-09"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-09",
+    "Created_At": "2026-09-11T09:04:19.285802+08:00",
+    "Actual_1D_Date": "2026-09-10"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-09",
+    "Created_At": "2026-09-11T09:04:19.285802+08:00",
+    "Actual_1D_Date": "2026-09-10"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-10",
+    "Created_At": "2026-09-12T09:06:10.438410+08:00",
+    "Actual_1D_Date": "2026-09-11"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-10",
+    "Created_At": "2026-09-12T09:06:10.438410+08:00",
+    "Actual_1D_Date": "2026-09-11"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-11",
+    "Created_At": "2026-09-15T09:27:31.828427+08:00",
+    "Actual_1D_Date": "2026-09-14"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-11",
+    "Created_At": "2026-09-15T09:27:31.828427+08:00",
+    "Actual_1D_Date": "2026-09-14"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-14",
+    "Created_At": "2026-09-16T09:24:32.854269+08:00",
+    "Actual_1D_Date": "2026-09-15"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-14",
+    "Created_At": "2026-09-16T09:24:32.854269+08:00",
+    "Actual_1D_Date": "2026-09-15"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-17",
+    "Created_At": "2026-09-19T09:10:01.863600+08:00",
+    "Actual_1D_Date": "2026-09-18"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-17",
+    "Created_At": "2026-09-19T09:10:01.863600+08:00",
+    "Actual_1D_Date": "2026-09-18"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-22",
+    "Created_At": "2026-09-24T09:23:42.956704+08:00",
+    "Actual_1D_Date": "2026-09-23"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-22",
+    "Created_At": "2026-09-24T09:23:42.956704+08:00",
+    "Actual_1D_Date": "2026-09-23"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-23",
+    "Created_At": "2026-09-25T09:29:38.104162+08:00",
+    "Actual_1D_Date": "2026-09-24"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-23",
+    "Created_At": "2026-09-25T09:29:38.104162+08:00",
+    "Actual_1D_Date": "2026-09-24"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-09-24",
+    "Created_At": "2026-09-26T09:32:37.623875+08:00",
+    "Actual_1D_Date": "2026-09-25"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-09-24",
+    "Created_At": "2026-09-26T09:32:37.623875+08:00",
+    "Actual_1D_Date": "2026-09-25"
+  }
+]

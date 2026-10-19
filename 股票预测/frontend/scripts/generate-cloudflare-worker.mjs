@@ -92,6 +92,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
 
 let source = await readFile(sourcePath, "utf8");
 const replacements = [
+  ['from "./_shared/forecast-eligibility"', 'from "../../netlify/functions/_shared/forecast-eligibility"'],
   ['from "./_shared/password"', 'from "../../netlify/functions/_shared/password"'],
   ['import type { Config, Context } from "@netlify/functions";\n', ""],
   ['import { getDeployStore, getStore } from "@netlify/blobs";\n', ""],
@@ -140,7 +141,9 @@ export const onRequest: PagesFunction = async ({ request, env, waitUntil }) => {
   const { handle, recordCacheMetric } = createApi(cloudflareDependencies(env));
   const country = (request as Request & { cf?: { country?: string } }).cf?.country;
   const cache = (globalThis as typeof globalThis & { caches?: { default?: CloudflareCache } }).caches?.default;
-  const cacheKey = new Request(request.url, { method: "GET" });
+  const cacheUrl = new URL(request.url);
+  if (cacheUrl.pathname.replace(/\\/$/, "") === "/api/forecast/scoreboard") cacheUrl.searchParams.set("__evaluation_protocol", "frozen-close-v1");
+  const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
   if (cache && edgeCacheable(request)) {
     const cached = await cache.match(cacheKey);
     if (cached) {

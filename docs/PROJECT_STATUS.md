@@ -90,3 +90,7 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 ## 2026-10-17 Codex 模型后续任务：离线诊断待审阅
 
 [PR #12](https://github.com/Icehacker88/market-analyst/pull/12) 认领并完成 MODEL-SAFE-MODE、LEDGER-ARIMA-BIAS 的第一轮离线诊断，见[报告](diagnostics/model-followup-2026-10-17.md)。固定维护源 9340248 与 Python/账本 38ad853，使用既有历史导出，不调用生产 API。主要发现是预测时间资格待核验、ARIMA 的 CV 目标对齐和验证方式问题、holdout 参与选模；未证明 Safe Mode 组合符号反转或 Router 同期一定更优。任务处于 review，实际模型修复未实施。没有修改生产逻辑、账本、配置或部署；当前发布版本不因此改变。
+
+## 2026-10-19 Codex 时间资格与不可变快照（本地完成，待交叉审阅）
+
+证据已独立提交 [PR #20](https://github.com/Icehacker88/market-analyst/pull/20)，仅文档/精简证据。独立实现分支 `codex/forecast-time-phase1-20261019` 基于 `623a1edd4f5adb770f5b2d09a83716c344166117`，交接见 [Phase 1 契约](forecast-time-phase1-2026-10-19.md)。新结算与治理排除时间不合格或历史证据不足的记录，原实际结果保留；不自动解除 Safe Mode。等待 Claude Code 交叉审阅及战绩页展示衔接。原账本未改，不回填，未触发日报/Kronos，未部署或修改生产配置；线上版本不因本次本地验证改变。

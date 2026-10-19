@@ -1,3 +1,4 @@
+import { makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
@@ -2206,6 +2207,7 @@ async function yahooHistory(symbol: string, start: string): Promise<Record<strin
   };
   const result = payload.chart?.result?.[0];
   if (!result?.timestamp?.length || !result.indicators?.quote?.[0]) throw new Error("No market history is available.");
+  const sourceObservedAt = new Date().toISOString();
   const records = technicalRecords(result.timestamp, result.indicators.quote[0], result.indicators.adjclose?.[0]?.adjclose || []);
   if (!records.length) throw new Error("No market history is available.");
   const prices = records.map((row) => Number(row.Price));
@@ -2215,6 +2217,7 @@ async function yahooHistory(symbol: string, start: string): Promise<Record<strin
     symbol,
     data_source: "yahoo",
     source_description: "Yahoo Finance live market data",
+    source_observed_at: sourceObservedAt,
     data_as_of: dataAsOf,
     snapshot: {
       latest_price: prices.at(-1),
@@ -2989,7 +2992,7 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
     backtestRows.push(...assetBacktestRows);
     if (Array.isArray(result.value.live?.records)) liveRows.push(...result.value.live.records as Array<Record<string, unknown>>);
     if (result.value.history.data_as_of) dataDates.push(String(result.value.history.data_as_of));
-    const assetBacktest = buildLedgerHistory(result.value.symbol, assetBacktestRows);
+    const assetBacktest = buildLedgerHistory(result.value.symbol, assetBacktestRows, true);
     const assetLive = result.value.live || emptyLedgerHistory(result.value.symbol, "Frozen live samples are accumulating.");
     perAsset.push({
       symbol: result.value.symbol,
@@ -3002,7 +3005,7 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
         statistics: assetLive.statistics,
         horizon_statistics: assetLive.horizon_statistics,
       },
-      governance: result.value.governance,
+      governance: evaluateModelGovernance(result.value.symbol, (result.value.live?.records || []) as Array<Record<string, unknown>>, result.value.governance),
       kronos: result.value.kronos ? {
         model_id: result.value.kronos.model_id,
         data_as_of: result.value.kronos.data_as_of,
@@ -3011,7 +3014,7 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
     });
   });
   if (!backtestRows.length) throw new Error("Core forecast validation data is temporarily unavailable.");
-  const backtest = buildLedgerHistory("CORE", backtestRows);
+  const backtest = buildLedgerHistory("CORE", backtestRows, true);
   const live = buildLedgerHistory("CORE", liveRows);
   const monitored = await settleWithConcurrency(monitoredSymbols, 5, async (symbol) => ({ symbol, records: await readCloudLedger(symbol) }));
   const recentLiveRecords = monitored.reduce<Array<Record<string, unknown>>>((records, item) => {
@@ -3032,7 +3035,7 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
       official_kronos_source: "NeoQuasar/Kronos-mini",
     },
     monitored_symbols: monitoredSymbols,
-    recent_live_records: recentLiveRecords,
+    recent_live_records: buildLedgerHistory("MONITORED", recentLiveRecords).records,
     per_asset: perAsset,
     backtest: {
       statistics: backtest.statistics,
@@ -4520,7 +4523,7 @@ function errorField(label: string): string {
   return label === "1D" ? "Absolute_Return_Error" : `Absolute_Return_Error_${label}`;
 }
 
-function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number, future: HistoryRecord[]): Record<string, unknown> {
+function attachBacktestOutcomes(row: Record<string, unknown>, currentPrice: number, future: HistoryRecord[]): Record<string, unknown> {
   const updated = { ...row };
   for (const horizon of EVALUATION_HORIZONS) {
     if (future.length < horizon.days || !Number.isFinite(currentPrice) || currentPrice <= 0) continue;
@@ -4549,9 +4552,54 @@ function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number
   return updated;
 }
 
-function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: string, window: number | null): Record<string, unknown> {
+// Live settlement is deliberately separate from simulated walk-forward outcomes.
+function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number, future: HistoryRecord[],
+  provenance: { source?: string; source_observed_at?: string; price_basis?: string }, now = Date.now()): Record<string, unknown> {
+  const updated = { ...row };
+  const snapshot = row.Evaluation_Snapshot as EvaluationSnapshot | undefined;
+  if (!snapshot || qualifyForecast(row, "1D", now).status !== "eligible") return updated;
+  const evidence = { ...((row.Outcome_Evidence || {}) as Record<string, Record<string, unknown>>) };
+  const statuses = { ...((row.Settlement_Status || {}) as Record<string, string>) };
+  for (const horizon of EVALUATION_HORIZONS) {
+    // Immutable once settled, including the evidence and original base.
+    if (toNumber(row[actualField(horizon.label)]) !== null) continue;
+    const targetDate = snapshot.target_sessions[horizon.days - 1];
+    const target = future.find((item) => item.Date === targetDate);
+    const observed = Date.parse(provenance.source_observed_at || "");
+    let reason = "awaiting_target_close";
+    if (qualifyForecast(row, horizon.label, now).status !== "eligible") reason = "timing_not_qualified";
+    else if (!targetDate || !equitySession(targetDate) || now < equitySession(targetDate)!.close + 900000) reason = "awaiting_target_close";
+    else if (!target) reason = "target_data_missing";
+    else if (!Number.isFinite(observed) || observed < equitySession(targetDate)!.close + 900000 || observed > now) reason = "target_data_unconfirmed";
+    else if (provenance.source !== snapshot.source || provenance.price_basis !== snapshot.price_basis) reason = "price_provenance_mismatch";
+    else if (!Number.isFinite(currentPrice) || Math.abs(currentPrice - Number(snapshot.base_price)) > Math.max(1e-8, Math.abs(currentPrice) * 1e-10)) reason = "base_price_revised";
+    else {
+      const actualPrice = toNumber(target.Price), forecast = toNumber(row[forecastField(horizon.label)]);
+      if (actualPrice === null || actualPrice <= 0 || forecast === null || target[snapshot.price_basis!] !== actualPrice) reason = "target_price_invalid";
+      else {
+        const actual = actualPrice / Number(snapshot.base_price) - 1;
+        updated[`Actual_${horizon.label}_Date`] = targetDate;
+        updated[actualField(horizon.label)] = actual;
+        updated[directionField(horizon.label)] = directionFromReturn(actual);
+        updated[correctField(horizon.label)] = directionFromReturn(forecast) === directionFromReturn(actual) ? 1 : 0;
+        updated[errorField(horizon.label)] = Math.abs(actual - forecast);
+        if (horizon.label === "1D" && ["Up", "Down"].includes(String(row.Action_Signal))) updated.Action_Signal_Correct = row.Action_Signal === directionFromReturn(actual) ? 1 : 0;
+        // Kronos component timestamps have no independent publication proof here; do not create its live score.
+        evidence[horizon.label] = { source: snapshot.source, price_basis: snapshot.price_basis, base_price: snapshot.base_price,
+          actual_price: actualPrice, target_session: targetDate, source_observed_at: provenance.source_observed_at, settled_at: new Date(now).toISOString() };
+        reason = "settled";
+      }
+    }
+    statuses[horizon.label] = reason;
+  }
+  updated.Outcome_Evidence = evidence;
+  updated.Settlement_Status = statuses;
+  return updated;
+}
+
+function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: string, window: number | null, backtest = false): Record<string, unknown> {
   const completedAll = [...ordered]
-    .filter((row) => toNumber(row[actualField(horizon)]) !== null && toNumber(row[correctField(horizon)]) !== null)
+    .filter((row) => (backtest || outcomeEligible(row, horizon)) && toNumber(row[actualField(horizon)]) !== null && toNumber(row[correctField(horizon)]) !== null)
     .sort((left, right) => String(left.As_Of_Date).localeCompare(String(right.As_Of_Date)));
   const completed = window === null ? completedAll : completedAll.slice(-window);
   const actualDirections = completed.map((row) => String(row[directionField(horizon)])).filter((value) => value === "Up" || value === "Down");
@@ -4561,6 +4609,12 @@ function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: str
   const accuracy = correct.length ? correct.reduce((sum, value) => sum + value, 0) / correct.length * 100 : null;
   const errors = completed.map((row) => toNumber(row[errorField(horizon)])).filter((value): value is number => value !== null);
   return {
+    protocol: backtest ? "walk-forward" : TIMING_PROTOCOL,
+    observed: ordered.filter((row) => toNumber(row[actualField(horizon)]) !== null).length,
+    eligible: backtest ? ordered.length : ordered.filter((row) => qualifyForecast(row, horizon).status === "eligible").length,
+    ineligible: backtest ? 0 : ordered.filter((row) => qualifyForecast(row, horizon).status === "ineligible").length,
+    unknown: backtest ? 0 : ordered.filter((row) => qualifyForecast(row, horizon).status === "unknown").length,
+    excluded: backtest ? 0 : ordered.filter((row) => toNumber(row[actualField(horizon)]) !== null && !outcomeEligible(row, horizon)).length,
     horizon,
     window: window === null ? "All" : String(window),
     completed: completed.length,
@@ -4627,7 +4681,7 @@ async function writeCloudLedger(symbol: string, records: Array<Record<string, un
   await store.setJSON(cloudLedgerKey(symbol), records);
 }
 
-async function recordCloudForecast(symbol: string, forecast: Record<string, unknown>): Promise<void> {
+async function recordCloudForecast(symbol: string, forecast: Record<string, unknown>, frozenAt: string, publicationId: string): Promise<void> {
   const ticker = String(forecast.symbol || symbol).toUpperCase();
   const asOfDate = String(forecast.data_as_of || "").slice(0, 10);
   if (!asOfDate) return;
@@ -4636,7 +4690,9 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
   const components = Array.isArray(forecast.model_components) ? forecast.model_components as Array<Record<string, unknown>> : [];
   const kronos = components.find((item) => String(item.model) === "Kronos-mini (Official)");
   records.push({
-    Created_At: String(forecast.generated_at || new Date().toISOString()),
+    Created_At: String(forecast.generated_at || ""),
+    Publication_ID: publicationId,
+    Evaluation_Snapshot: forecast.evaluation_snapshot ? { ...(forecast.evaluation_snapshot as EvaluationSnapshot), frozen_at: frozenAt } : null,
     As_Of_Date: asOfDate,
     Ticker: ticker,
     Best_Model: String(forecast.best_model || "Cloud Trend"),
@@ -4667,27 +4723,21 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
 }
 
 async function reconcileCloudLedger(symbol: string, records: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
-  if (!records.length) return records;
+  // Do not backfill or rewrite legacy records. No history fetch when none can settle.
+  const candidates = records.filter((row) => qualifyForecast(row).status === "eligible" && EVALUATION_HORIZONS.some((h) => toNumber(row[actualField(h.label)]) === null));
+  if (!candidates.length) return records;
   const asset = await resolveAsset(symbol);
-  const earliest = records.map((row) => String(row.As_Of_Date).slice(0, 10)).filter(Boolean).sort()[0];
-  const startDate = new Date(`${earliest || new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-  startDate.setDate(startDate.getDate() - 10);
-  const history = await cachedPublicHistory(asset.symbol, startDate.toISOString().slice(0, 10), asset.data_source, asset.asset_type) as { records: HistoryRecord[] };
-  const marketRows = history.records
-    .filter((row) => typeof row.Date === "string" && Number.isFinite(Number(row.Price)))
-    .sort((left, right) => String(left.Date).localeCompare(String(right.Date)));
-  let changed = false;
+  const earliest = candidates.map((row) => String(row.As_Of_Date)).sort()[0];
+  const history = await cachedPublicHistory(asset.symbol, earliest, asset.data_source, asset.asset_type) as { records: HistoryRecord[]; data_source?: string; source_observed_at?: string };
   const next = records.map((row) => {
-    const asOfDate = String(row.As_Of_Date).slice(0, 10);
-    const past = marketRows.filter((item) => String(item.Date) <= asOfDate);
-    const future = marketRows.filter((item) => String(item.Date) > asOfDate);
-    if (!past.length) return row;
-    const currentPrice = Number(past.at(-1)?.Price);
-    const updated = attachActualOutcomes(row, currentPrice, future);
-    if (JSON.stringify(updated) !== JSON.stringify(row)) changed = true;
-    return updated;
+    if (!candidates.includes(row)) return row;
+    const base = history.records.find((item) => item.Date === row.As_Of_Date);
+    const snapshot = row.Evaluation_Snapshot as EvaluationSnapshot;
+    const basis = base && base[snapshot.price_basis!] === base.Price ? snapshot.price_basis! : undefined;
+    return attachActualOutcomes(row, base ? Number(base.Price) : NaN, history.records,
+      { source: history.data_source, source_observed_at: history.source_observed_at, price_basis: basis });
   });
-  if (changed) await writeCloudLedger(symbol, next);
+  if (JSON.stringify(next) !== JSON.stringify(records)) await writeCloudLedger(symbol, next);
   return next;
 }
 
@@ -4721,9 +4771,9 @@ function evaluateModelGovernance(symbol: string, records: Array<Record<string, u
         : "stable";
   }
   if (previous?.status === "rollback" && status === "watch" && Number(edge20 ?? 0) < 3) status = "rollback";
-  const activeModel = status === "rollback" ? "Orivane Ensemble Safe Mode" : "Orivane Horizon Router";
+  const activeModel = (status === "rollback" || status === "warming_up") ? "Orivane Ensemble Safe Mode" : "Orivane Horizon Router";
   const reasons = status === "warming_up"
-    ? [`真实冻结样本 ${samplesAll} 个，达到 20 个后启用漂移与回滚判断。`, `Only ${samplesAll} frozen live samples are complete; drift checks activate at 20.`]
+    ? [`时间资格通过的已结算样本 ${samplesAll} 个；不足 20 个，保持保守组合，不据此确认模型有效。`, `Only ${samplesAll} time-qualified outcomes; keep the conservative ensemble until 20 qualified samples.`]
     : status === "rollback"
       ? [`近 20 个真实样本方向优势 ${edge20?.toFixed(1) ?? "—"} 个百分点，已回退到未调权组合并暂停未验证叠加信号。`, `The latest 20-sample edge is ${edge20?.toFixed(1) ?? "—"} points; the router rolled back to the untuned ensemble and paused unvalidated overlays.`]
       : status === "watch"
@@ -4773,13 +4823,13 @@ async function settleForecastSymbols(symbols: string[]): Promise<Record<string, 
   };
 }
 
-function buildLedgerHistory(symbol: string, records: Array<Record<string, unknown>>): Record<string, unknown> {
+function buildLedgerHistory(symbol: string, records: Array<Record<string, unknown>>, backtest = false): Record<string, unknown> {
   const ordered = [...records].sort((left, right) => String(right.As_Of_Date).localeCompare(String(left.As_Of_Date)));
   const completedAll = [...ordered]
-    .filter((row) => toNumber(row.Actual_1D_Return) !== null && toNumber(row.Raw_Direction_Correct) !== null)
+    .filter((row) => (backtest || outcomeEligible(row, "1D")) && toNumber(row.Actual_1D_Return) !== null && toNumber(row.Raw_Direction_Correct) !== null)
     .sort((left, right) => String(left.As_Of_Date).localeCompare(String(right.As_Of_Date)));
-  const statistics = [20, 60, 120, null].map((window) => horizonStatistics(ordered, "1D", window));
-  const horizonStatisticsRows = EVALUATION_HORIZONS.flatMap((horizon) => [20, 60, 120, null].map((window) => horizonStatistics(ordered, horizon.label, window)));
+  const statistics = [20, 60, 120, null].map((window) => horizonStatistics(ordered, "1D", window, backtest));
+  const horizonStatisticsRows = EVALUATION_HORIZONS.flatMap((horizon) => [20, 60, 120, null].map((window) => horizonStatistics(ordered, horizon.label, window, backtest)));
   let hits = 0;
   const rolling = completedAll.map((row, index) => {
     hits += Number(row.Raw_Direction_Correct || 0);
@@ -4793,41 +4843,28 @@ function buildLedgerHistory(symbol: string, records: Array<Record<string, unknow
   });
   return {
     symbol,
-    notice: "Historical accuracy uses completed frozen predictions only.",
+    notice: backtest ? "Walk-forward backtest, not live publication evidence." : "Accuracy counts time-qualified frozen outcomes only; legacy/unknown records remain visible but unscored.",
+    evaluation_protocol: backtest ? "walk-forward" : TIMING_PROTOCOL,
     statistics,
     horizon_statistics: horizonStatisticsRows,
     records: ordered.map((row) => ({
       ...row,
-      Verified: toNumber(row.Actual_1D_Return) !== null,
-      Verified_5D: toNumber(row.Actual_5D_Return) !== null,
-      Verified_10D: toNumber(row.Actual_10D_Return) !== null,
-      Verified_1M: toNumber(row.Actual_1M_Return) !== null,
+      Time_Eligibility: backtest ? null : Object.fromEntries(EVALUATION_HORIZONS.map((h) => [h.label, qualifyForecast(row, h.label)])),
+      Outcome_Observed: Object.fromEntries(EVALUATION_HORIZONS.map((h) => [h.label, toNumber(row[actualField(h.label)]) !== null])),
+      Verified: (backtest || outcomeEligible(row, "1D")) && toNumber(row.Actual_1D_Return) !== null,
+      Verified_5D: (backtest || outcomeEligible(row, "5D")) && toNumber(row.Actual_5D_Return) !== null,
+      Verified_10D: (backtest || outcomeEligible(row, "10D")) && toNumber(row.Actual_10D_Return) !== null,
+      Verified_1M: (backtest || outcomeEligible(row, "1M")) && toNumber(row.Actual_1M_Return) !== null,
     })),
     charts: { rolling_accuracy: rolling, scatter: [], timeline: [], errors: [] },
   };
 }
 
 function emptyLedgerHistory(symbol: string, notice: string): Record<string, unknown> {
-  return {
-    symbol,
-    notice,
-    statistics: [20, 60, 120, null].map((window) => ({
-      horizon: "1D",
-      window: window === null ? "All" : String(window),
-      completed: 0,
-      pending: 0,
-      direction_accuracy: null,
-      majority_baseline_accuracy: null,
-      direction_edge: null,
-      mean_absolute_return_error: null,
-      median_absolute_return_error: null,
-      hit_count: 0,
-      miss_count: 0,
-    })),
-    horizon_statistics: [],
-    records: [],
-    charts: { rolling_accuracy: [], scatter: [], timeline: [], errors: [] },
-  };
+  return { symbol, notice, evaluation_protocol: TIMING_PROTOCOL,
+    statistics: [20, 60, 120, null].map((window) => horizonStatistics([], "1D", window)),
+    horizon_statistics: EVALUATION_HORIZONS.flatMap((h) => [20, 60, 120, null].map((window) => horizonStatistics([], h.label, window))),
+    records: [], charts: { rolling_accuracy: [], scatter: [], timeline: [], errors: [] } };
 }
 
 function segmentedPredictionHistory(
@@ -4838,11 +4875,13 @@ function segmentedPredictionHistory(
 ): Record<string, unknown> {
   const backtestData = backtest || emptyLedgerHistory(symbol, "No walk-forward backtest is available yet.");
   const liveData = live || emptyLedgerHistory(symbol, "No completed frozen live predictions are available yet.");
-  const legacyData = legacy || emptyLedgerHistory(symbol, "No legacy prediction records are available.");
+  const legacyData = legacy ? buildLedgerHistory(symbol, Array.isArray(legacy.records) ? legacy.records as Array<Record<string, unknown>> : []) : emptyLedgerHistory(symbol, "No legacy prediction records are available.");
   return {
     symbol,
     notice: "Walk-forward backtests, frozen live predictions and legacy records are reported separately.",
+    evaluation_protocol: TIMING_PROTOCOL,
     statistics: liveData.statistics,
+    horizon_statistics: liveData.horizon_statistics,
     records: liveData.records,
     charts: liveData.charts,
     backtest: backtestData,
@@ -4883,7 +4922,7 @@ function walkForwardEvaluationRows(
         },
         records: past,
       });
-      const row = attachActualOutcomes({
+      const row = attachBacktestOutcomes({
         Created_At: new Date(`${String(current.Date)}T00:00:00Z`).toISOString(),
         As_Of_Date: String(current.Date),
         Ticker: symbol.toUpperCase(),
@@ -4916,7 +4955,7 @@ function walkForwardEvaluationRows(
         { model: "Naive No Change", forecast1d: 0, forecast5d: 0, forecast10d: 0, forecast1m: 0 },
       ];
       candidates.forEach((candidate) => {
-        models.push(attachActualOutcomes({
+        models.push(attachBacktestOutcomes({
           Created_At: new Date(`${String(current.Date)}T00:00:00Z`).toISOString(),
           As_Of_Date: String(current.Date),
           Ticker: symbol.toUpperCase(),
@@ -5074,7 +5113,7 @@ function horizonModelSelections(trend: TrendForecast, modelRows: Array<Record<st
 }
 
 function predictionHistoryFromBacktest(symbol: string, history: { records: HistoryRecord[] }): Record<string, unknown> {
-  return buildLedgerHistory(symbol, walkForwardPredictionRows(symbol, history));
+  return buildLedgerHistory(symbol, walkForwardPredictionRows(symbol, history), true);
 }
 
 function modelPerformanceFromHistory(symbol: string, history: { records: HistoryRecord[] }, liveHistory: Record<string, unknown> | null): Record<string, unknown> {
@@ -5090,7 +5129,7 @@ function modelPerformanceFromHistory(symbol: string, history: { records: History
       return (toNumber(left.Return_RMSE) ?? 1) - (toNumber(right.Return_RMSE) ?? 1);
     });
   const best = models.find((item) => String(item.Model) === "Orivane Ensemble") || models[0] || summarizeModelRows("Orivane Ensemble", rows);
-  const ledger = buildLedgerHistory(symbol, rows);
+  const ledger = buildLedgerHistory(symbol, rows, true);
   const liveStats = Array.isArray(liveHistory?.statistics)
     ? liveHistory.statistics
     : (emptyLedgerHistory(symbol, "No frozen live predictions are available yet.").statistics as unknown[]);
@@ -5237,15 +5276,19 @@ async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string
     }
   }
   if (!marketDate || String(cached.data_as_of || "").slice(0, 10) !== marketDate) return null;
-  await recordCloudForecast(symbol, cached).catch(() => undefined);
   return applyCurrentForecastGuard(cached);
 }
 
 async function freezeCloudForecast(symbol: string, forecast: Record<string, unknown>): Promise<Record<string, unknown>> {
-  rememberForecast(symbol, forecast);
   const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
-  await store.setJSON(forecastKey(symbol), forecast).catch(() => undefined);
-  await recordCloudForecast(symbol, forecast).catch(() => undefined);
+  // Unique append-only source evidence survives mutable forecast-cache replacement.
+  const publicationId = crypto.randomUUID();
+  await store.setJSON(`publications/time-v1/${publicationId}.json`, forecast);
+  await store.setJSON(forecastKey(symbol), forecast);
+  // Both immutable evidence and serving cache acknowledged, never report start/cache read time.
+  const frozenAt = new Date().toISOString();
+  await recordCloudForecast(symbol, forecast, frozenAt, publicationId);
+  rememberForecast(symbol, forecast);
   return forecast;
 }
 
@@ -5293,7 +5336,7 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
   const liveHistory = await cloudLedgerHistory(asset.symbol).catch(() => null);
   const liveRecords = Array.isArray(liveHistory?.records) ? liveHistory.records as Array<Record<string, unknown>> : [];
   const modelGovernance = await persistModelGovernance(asset.symbol, liveRecords).catch(() => evaluateModelGovernance(asset.symbol, liveRecords, null));
-  const safeMode = modelGovernance.status === "rollback";
+  const safeMode = modelGovernance.status === "rollback" || modelGovernance.status === "warming_up";
   const dailyVolatility = Number(history.snapshot.annualized_volatility_20d || 0) / Math.sqrt(252) || 0.012;
   const [officialKronos, contextualSignal] = safeMode
     ? [null, null]
@@ -5307,10 +5350,10 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
   const modelRows = evaluation.models;
   const optimization = optimize && !safeMode
     ? await optimizationForForecast(asset, history.data_as_of, modelRows).catch(() => historyOptimizationProfile(asset.symbol, modelRows, history.data_as_of))
-    : neutralForecastOptimization(history.data_as_of, safeMode ? "真实冻结样本触发漂移回滚，暂停自动调权与未验证叠加信号。" : "核心资产每日冻结仅使用已验证基准权重；昂贵调权仅对收藏资产运行。");
+    : neutralForecastOptimization(history.data_as_of, safeMode ? "合格实盘样本不足或治理处于保守状态，暂停自动调权与未验证叠加信号。" : "核心资产每日冻结仅使用已验证基准权重；昂贵调权仅对收藏资产运行。");
   const trend = trendForecast({ ...history, context, optimization });
   let horizonModels = horizonModelSelections(trend, modelRows);
-  if (modelGovernance.status === "watch" || modelGovernance.status === "rollback") {
+  if (modelGovernance.status !== "stable") {
     const ensembleReturns: Record<ForecastHorizon, number> = { "1D": trend.forecast1d, "5D": trend.forecast5d, "10D": trend.forecast10d, "1M": trend.forecast1m };
     horizonModels = horizonModels.map((item) => ({
       ...item,
@@ -5419,6 +5462,8 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
   const routedSignal = action.actionable ? (routedSignalValue >= 0 ? "Up" : "Down") : "Observe";
   const routedScenarios = buildForecastScenarios(latestPrice, routed["1M"], trend.marketRegime.daily_volatility, trend.agreementRatio);
   const routingSummaryZh = horizonModels.map((item) => `${item.horizon} ${item.selected_model}${item.direction_probability === null ? "" : `（${item.direction_probability.toFixed(1)}%）`}`).join("；");
+  const generatedAt = new Date().toISOString();
+  const evaluationSnapshot = makeEvaluationSnapshot(asset, history.records.at(-1) || {}, (history as unknown as Record<string, unknown>).data_source, (history as unknown as Record<string, unknown>).source_observed_at, generatedAt);
   const routingSummaryEn = horizonModels.map((item) => `${item.horizon} ${item.selected_model}${item.direction_probability === null ? "" : ` (${item.direction_probability.toFixed(1)}%)`}`).join("; ");
   return {
     symbol: asset.symbol,
@@ -5441,7 +5486,8 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
     forecast_intervals: intervals,
     kline_forecast: trend.klineForecast,
     risk: null,
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt,
+    evaluation_snapshot: evaluationSnapshot,
     data_as_of: history.data_as_of,
     validation_sample_size: backtestSamples,
     beats_majority_baseline: backtestEdge === null ? null : backtestEdge > 0,
@@ -5693,7 +5739,7 @@ async function route(request: Request, context: Context): Promise<Response> {
     return query ? cachedJson({ query, results: await cachedValue(`search-v4/${aliasKey(query)}`, 6 * 3600, () => searchAssets(query)) }) : error(422, "validation_error", "Search query is required.");
   }
   if (request.method === "GET" && path === "/home") return cachedJson({ data: await cachedValue("market/home-v5", 60 * 60, homeData) });
-  if (request.method === "GET" && path === "/forecast/scoreboard") return cachedJson({ data: await cachedValue("forecast/public-scoreboard-v2", 6 * 3600, forecastScoreboard) });
+  if (request.method === "GET" && path === "/forecast/scoreboard") return cachedJson({ data: await cachedValue("forecast/public-scoreboard-time-v1", 6 * 3600, forecastScoreboard) });
   if (request.method === "GET" && path === "/kronos/latest") {
     const symbol = String(url.searchParams.get("symbol") || "").toUpperCase();
     if (!symbol) return error(422, "validation_error", "Symbol is required.");
@@ -5840,11 +5886,11 @@ async function route(request: Request, context: Context): Promise<Response> {
         cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as Promise<{ records: HistoryRecord[] }>,
         cloudLedgerHistory(asset.symbol).catch(() => null),
       ]);
-      const data = await cachedValue(`performance/cloud-v4/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`, 6 * 3600, async () => modelPerformanceFromHistory(asset.symbol, historyData, liveHistory));
+      const data = await cachedValue(`performance/cloud-time-v1/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`, 6 * 3600, async () => modelPerformanceFromHistory(asset.symbol, historyData, liveHistory));
       return json({ data });
     } catch (cause) {
       const data = staticData("performance", symbol);
-      return data ? json({ data }) : error(502, "forecast_not_found", cause instanceof Error ? cause.message : "暂无该资产的模型表现。");
+      return data ? json({ data: { ...(data as Record<string, unknown>), live_predictions: { statistics: emptyLedgerHistory(symbol, "Legacy outcomes are unqualified.").statistics, notice: "Legacy outcomes are unqualified.", evaluation_protocol: TIMING_PROTOCOL } } }) : error(502, "forecast_not_found", cause instanceof Error ? cause.message : "暂无该资产的模型表现。");
     }
   }
   const history = path.match(/^\/predictions\/history\/([^/]+)$/);
