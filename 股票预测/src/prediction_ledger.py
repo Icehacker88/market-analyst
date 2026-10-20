@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 
 from src.preprocessing import clean_price_data
-from src.forecast_eligibility import make_snapshot, qualify, outcome_eligible, session, HORIZONS, VERSION, timestamp
+from src.forecast_eligibility import (SETTLEMENT_BASIS, HORIZONS, VERSION, make_snapshot, outcome_eligible,
+                                      qualify, session, timestamp)
 
 
 LEDGER_COLUMNS = [
@@ -85,13 +86,13 @@ def update_prediction_ledger(
         ticker = str(prediction.get("Ticker", ""))
         if (pd.notna(prediction.get("Error")) and prediction.get("Error")) or ticker not in market_frames:
             continue
-        cleaned, quality = clean_price_data(market_frames[ticker])
+        cleaned, _ = clean_price_data(market_frames[ticker])
         as_of_date = pd.to_datetime(cleaned["Date"].iloc[-1]).date().isoformat()
         if (ticker, as_of_date) in existing_keys:
             continue
         row = _new_ledger_row(prediction, generated_at, as_of_date)
         provenance = (market_provenance or {}).get(ticker, {})
-        snapshot = make_snapshot(ticker, as_of_date, float(cleaned["Price"].iloc[-1]), quality.price_column,
+        snapshot = make_snapshot(ticker, as_of_date, float(settlement_closes(cleaned).get(as_of_date, 0.0)), SETTLEMENT_BASIS,
                                  provenance.get("source", ""), provenance.get("observed_at", ""),
                                  str(prediction.get("Forecast_Generated_At", "")), "")
         row["Evaluation_Snapshot_JSON"] = json.dumps(snapshot, sort_keys=True)
@@ -226,6 +227,18 @@ def _load_ledger(path: Path) -> pd.DataFrame:
     return ledger.reindex(columns=list(dict.fromkeys([*LEDGER_COLUMNS, *ledger.columns])))
 
 
+def settlement_closes(cleaned: pd.DataFrame) -> pd.Series:
+    """Positive unadjusted closes keyed by ISO date, the live freeze/settlement basis.
+
+    Unlike Adj Close, past closes are not rewritten at ex-dividend dates (only by splits).
+    """
+    if "Close" not in cleaned.columns:
+        return pd.Series(dtype=float)
+    closes = pd.Series(pd.to_numeric(cleaned["Close"], errors="coerce").to_numpy(),
+                       index=pd.to_datetime(cleaned["Date"]).dt.date.astype(str).to_numpy())
+    return closes[np.isfinite(closes) & (closes > 0)]
+
+
 def _evaluation_row(row: pd.Series) -> dict:
     result = row.to_dict()
     for key in ["Evaluation_Snapshot", "Outcome_Evidence"]:
@@ -256,9 +269,8 @@ def _reconcile_actuals(
     result = ledger.copy()
     now = datetime.now(timezone.utc)
     for ticker, raw in market_frames.items():
-        cleaned, quality = clean_price_data(raw)
-        cleaned["Date"] = pd.to_datetime(cleaned["Date"]).dt.date.astype(str)
-        by_date = cleaned.set_index("Date")
+        cleaned, _ = clean_price_data(raw)
+        closes = settlement_closes(cleaned)
         origin = (provenance or {}).get(ticker, {})
         observed = timestamp(origin.get("observed_at"))
         for index in result.index[result["Ticker"] == ticker]:
@@ -267,10 +279,10 @@ def _reconcile_actuals(
                 continue  # Never settle/backfill legacy or disqualified records.
             snapshot = row["Evaluation_Snapshot"]
             base = snapshot["base_session"]
-            if (base not in by_date.index or quality.price_column != snapshot["price_basis"]
+            if (base not in closes.index or snapshot["price_basis"] != SETTLEMENT_BASIS
                     or origin.get("source") != snapshot["source"] or observed is None or observed > now
-                    or not np.isclose(float(by_date.loc[base, "Price"]), snapshot["base_price"], rtol=1e-10, atol=1e-8)):
-                continue  # Revised/mixed-basis series cannot silently change the frozen denominator.
+                    or not np.isclose(float(closes[base]), snapshot["base_price"], rtol=1e-10, atol=1e-8)):
+                continue  # A split or data revision cannot silently change the frozen denominator.
             evidence = dict(row["Outcome_Evidence"])
             for horizon in ["1D", "5D"]:
                 actual_column = "Actual_1D_Return" if horizon == "1D" else "Actual_5D_Realized_Vol"
@@ -278,9 +290,9 @@ def _reconcile_actuals(
                     continue
                 dates = snapshot["target_sessions"][:HORIZONS[horizon]]
                 target = dates[-1]
-                if any(d not in by_date.index for d in dates) or observed < session(target)[1] + timedelta(minutes=15):
+                if any(d not in closes.index for d in dates) or observed < session(target)[1] + timedelta(minutes=15):
                     continue
-                prices = np.array([snapshot["base_price"], *[float(by_date.loc[d, "Price"]) for d in dates]])
+                prices = np.array([snapshot["base_price"], *[float(closes[d]) for d in dates]])
                 if not np.isfinite(prices).all() or (prices <= 0).any():
                     continue
                 if horizon == "1D":

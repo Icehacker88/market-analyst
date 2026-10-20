@@ -2,6 +2,10 @@ import calendar from "../../../../contracts/us-equity-calendar.json";
 
 export const TIMING_PROTOCOL = "frozen-close-v1";
 export const HORIZON_DAYS: Record<string, number> = { "1D": 1, "5D": 5, "10D": 10, "1M": 22 };
+// Live freeze/settlement basis. Adj Close rewrites every past day at each ex-dividend date,
+// so a frozen Adj Close base would never match again; Close only changes on splits.
+// Live scores are therefore price returns: any window that spans an ex-dividend date omits that dividend.
+export const SETTLEMENT_BASIS = "Close";
 type Row = Record<string, unknown>;
 export type Qualification = { status: "eligible" | "ineligible" | "unknown"; reason: string; protocol: string };
 export type EvaluationSnapshot = {
@@ -48,9 +52,9 @@ export function followingSessions(day: string, count: number): string[] {
 }
 export function makeEvaluationSnapshot(asset: { symbol: string; asset_type?: string; exchange?: string | null; currency?: string | null }, base: Row, source: unknown, observed: unknown, generated: string): EvaluationSnapshot {
   const supported = knownSymbols.has(asset.symbol) || (["stock", "etf"].includes(asset.asset_type || "") && asset.currency === "USD" && ["NYSE", "NYSE Arca", "NASDAQ", "NMS", "NGM", "NCM", "NYQ", "PCX", "ASE", "AMEX", "BATS"].includes(asset.exchange || ""));
-  const basis = finitePositive(base["Adj Close"]) && base.Price === base["Adj Close"] ? "Adj Close" : !finitePositive(base["Adj Close"]) && finitePositive(base.Close) && base.Price === base.Close ? "Close" : null;
-  return { schema_version: TIMING_PROTOCOL, calendar: supported ? calendar.version : null, symbol: asset.symbol, base_session: String(base.Date || ""), base_price: finitePositive(base.Price) ? base.Price : null,
-    price_basis: basis, source: typeof source === "string" ? source : null, source_observed_at: typeof observed === "string" ? observed : null,
+  const close = finitePositive(base.Close) ? base.Close : null;
+  return { schema_version: TIMING_PROTOCOL, calendar: supported ? calendar.version : null, symbol: asset.symbol, base_session: String(base.Date || ""), base_price: close,
+    price_basis: close === null ? null : SETTLEMENT_BASIS, source: typeof source === "string" ? source : null, source_observed_at: typeof observed === "string" ? observed : null,
     generated_at: generated, frozen_at: null, target_sessions: supported ? followingSessions(String(base.Date || ""), 22) : [] };
 }
 export function qualifyForecast(row: Row, horizon = "1D", now = Date.now()): Qualification {
@@ -67,7 +71,7 @@ export function qualifyForecast(row: Row, horizon = "1D", now = Date.now()): Qua
   if (s?.schema_version !== TIMING_PROTOCOL) return result("unknown", "legacy_snapshot_missing");
   if (s.symbol !== row.Ticker || s.base_session !== base || s.calendar !== calendar.version) return result("unknown", "snapshot_identity_mismatch");
   if (JSON.stringify(Array.isArray(s.target_sessions) ? s.target_sessions.slice(0, targets.length) : null) !== JSON.stringify(targets)) return result("unknown", "target_sessions_mismatch");
-  if (!finitePositive(s.base_price) || !["Adj Close", "Close"].includes(s.price_basis || "") || !s.source) return result("unknown", "price_provenance_missing");
+  if (!finitePositive(s.base_price) || s.price_basis !== SETTLEMENT_BASIS || !s.source) return result("unknown", "price_provenance_missing");
   const observed = timestamp(s.source_observed_at), frozen = timestamp(s.frozen_at);
   if (observed === null || frozen === null || timestamp(s.generated_at) !== generated) return result("unknown", "snapshot_time_missing");
   if (observed < times.close + 15 * 60000) return result("ineligible", "source_close_unconfirmed");

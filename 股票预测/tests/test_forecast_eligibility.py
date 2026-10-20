@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ NOW = datetime(2026, 10, 19, tzinfo=timezone.utc)
 
 def record(day="2026-09-02", generated="2026-09-02T21:00:00Z", observed="2026-09-02T20:30:00Z"):
     return dict(Ticker="SPY", As_Of_Date=day, Created_At=generated,
-        Evaluation_Snapshot=make_snapshot("SPY", day, 100, "Adj Close", "yahoo", observed, generated, generated),
+        Evaluation_Snapshot=make_snapshot("SPY", day, 100, "Close", "yahoo", observed, generated, generated),
         Forecast_1D_Return=.01, Raw_Direction="Up", Action_Signal="Up")
 
 
@@ -28,8 +29,8 @@ def frame(row):
     return f
 
 
-def market(prices=(100, 110), days=("2026-09-02", "2026-09-03")):
-    return pd.DataFrame({"Date": list(days), "Adj Close": list(prices), "Close": list(prices)})
+def market(prices=(100, 110), days=("2026-09-02", "2026-09-03"), adjusted=None):
+    return pd.DataFrame({"Date": list(days), "Adj Close": list(adjusted or prices), "Close": list(prices)})
 
 
 class ForecastEligibilityTests(unittest.TestCase):
@@ -61,7 +62,7 @@ class ForecastEligibilityTests(unittest.TestCase):
         good=record();self.assertEqual(qualify(good,now=NOW)["status"],"eligible")
         cases=[("frozen_at","2026-09-03T13:30:00Z","ineligible"),
                ("source_observed_at","2026-09-02T19:59:59Z","ineligible"),
-               ("frozen_at",None,"unknown"),("price_basis","NAV","unknown"),
+               ("frozen_at",None,"unknown"),("price_basis","NAV","unknown"),("price_basis","Adj Close","unknown"),
                ("target_sessions",None,"unknown"),("symbol","QQQ","unknown"),
                ("source_observed_at","2026-09-02T21:30:00Z","unknown")]
         for key,value,state in cases:
@@ -103,3 +104,25 @@ class ForecastEligibilityTests(unittest.TestCase):
             ledger,_=update_prediction_ledger(Path(d)/"ledger.csv",prediction,{"SPY":market((100,), ("2026-09-02",))},NOW,
                   {"SPY":{"source":"yahoo","observed_at":"2026-09-02T20:30:00Z"}})
             self.assertEqual(qualify(_evaluation_row(ledger.iloc[0]),now=NOW)["status"],"ineligible")
+
+    def test_settles_on_close_when_dividend_rewrites_adjusted_history(self):
+        original=frame(record());provenance={"SPY":{"source":"yahoo","observed_at":"2026-09-03T20:30:00Z"}}
+        # Ex-dividend on 09-03 rewrites the 09-02 Adj Close (100 -> 99.7); Close is unchanged.
+        dividend=_reconcile_actuals(original,{"SPY":market((100,110),adjusted=(99.7,110))},provenance)
+        self.assertTrue(outcome_eligible(_evaluation_row(dividend.iloc[0]),"1D",NOW))
+        self.assertAlmostEqual(dividend.iloc[0]["Actual_1D_Return"],math.log(110/100))
+        evidence=json.loads(dividend.iloc[0]["Outcome_Evidence_JSON"])["1D"]
+        self.assertEqual((evidence["price_basis"],evidence["base_price"],evidence["actual_price"]),("Close",100,110))
+        # A split rewrites Close itself, so the frozen base no longer matches and nothing settles.
+        split=_reconcile_actuals(original,{"SPY":market((50,55))},provenance)
+        self.assertTrue(pd.isna(split.iloc[0]["Actual_1D_Return"]))
+
+    def test_new_snapshot_freezes_unadjusted_close(self):
+        prediction=pd.DataFrame([dict(Ticker="SPY",Forecast_Generated_At="2026-09-02T21:00:00Z")])
+        with tempfile.TemporaryDirectory() as d:
+            ledger,_=update_prediction_ledger(Path(d)/"ledger.csv",prediction,
+                {"SPY":market((100,),("2026-09-02",),adjusted=(98.5,))},NOW,
+                {"SPY":{"source":"yahoo","observed_at":"2026-09-02T20:30:00Z"}})
+            snapshot=json.loads(ledger.iloc[0]["Evaluation_Snapshot_JSON"])
+            self.assertEqual((snapshot["price_basis"],snapshot["base_price"]),("Close",100.0))
+

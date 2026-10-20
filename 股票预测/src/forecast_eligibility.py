@@ -2,6 +2,9 @@
 
 No inference of historical publication time, no network or ledger writes.
 Only reviewed US equity sessions qualify; indices/FX/other markets stay unknown.
+Live freeze and settlement use the unadjusted Close: Adj Close is rewritten for every
+past day at each ex-dividend date, so a frozen Adj Close base would never match again.
+Scores are therefore price returns: any window that spans an ex-dividend date omits that dividend.
 """
 from __future__ import annotations
 
@@ -16,7 +19,8 @@ CALENDAR = json.loads((Path(__file__).resolve().parents[1] / "contracts/us-equit
 VERSION = "frozen-close-v1"
 NY = ZoneInfo("America/New_York")
 HORIZONS = {"1D": 1, "5D": 5, "10D": 10, "1M": 22}
-# Python's scheduled report covers these two US equity ETFs. Do not classify by regex.
+SETTLEMENT_BASIS = "Close"
+# Reviewed US equity symbols (the report's ETFs plus NVDA). Do not classify by regex.
 US_SYMBOLS = {"SPY", "QQQ", "NVDA"}
 
 
@@ -96,7 +100,7 @@ def qualify(row: dict, horizon: str = "1D", now: datetime | None = None) -> dict
         return result("unknown", "snapshot_identity_mismatch")
     if not isinstance(snapshot.get("target_sessions"), list) or snapshot["target_sessions"][:len(targets)] != targets:
         return result("unknown", "target_sessions_mismatch")
-    if not positive(snapshot.get("base_price")) or snapshot.get("price_basis") not in {"Adj Close", "Close"} or not snapshot.get("source"):
+    if not positive(snapshot.get("base_price")) or snapshot.get("price_basis") != SETTLEMENT_BASIS or not snapshot.get("source"):
         return result("unknown", "price_provenance_missing")
     observed = timestamp(snapshot.get("source_observed_at"))
     frozen = timestamp(snapshot.get("frozen_at"))

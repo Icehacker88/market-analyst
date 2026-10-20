@@ -1,4 +1,4 @@
-import { makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
@@ -4574,8 +4574,8 @@ function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number
     else if (provenance.source !== snapshot.source || provenance.price_basis !== snapshot.price_basis) reason = "price_provenance_mismatch";
     else if (!Number.isFinite(currentPrice) || Math.abs(currentPrice - Number(snapshot.base_price)) > Math.max(1e-8, Math.abs(currentPrice) * 1e-10)) reason = "base_price_revised";
     else {
-      const actualPrice = toNumber(target.Price), forecast = toNumber(row[forecastField(horizon.label)]);
-      if (actualPrice === null || actualPrice <= 0 || forecast === null || target[snapshot.price_basis!] !== actualPrice) reason = "target_price_invalid";
+      const actualPrice = toNumber(target[snapshot.price_basis!]), forecast = toNumber(row[forecastField(horizon.label)]);
+      if (actualPrice === null || actualPrice <= 0 || forecast === null) reason = "target_price_invalid";
       else {
         const actual = actualPrice / Number(snapshot.base_price) - 1;
         updated[`Actual_${horizon.label}_Date`] = targetDate;
@@ -4733,8 +4733,9 @@ async function reconcileCloudLedger(symbol: string, records: Array<Record<string
     if (!candidates.includes(row)) return row;
     const base = history.records.find((item) => item.Date === row.As_Of_Date);
     const snapshot = row.Evaluation_Snapshot as EvaluationSnapshot;
-    const basis = base && base[snapshot.price_basis!] === base.Price ? snapshot.price_basis! : undefined;
-    return attachActualOutcomes(row, base ? Number(base.Price) : NaN, history.records,
+    // Settle on the unadjusted Close so ex-dividend rewrites of Adj Close cannot strand the record.
+    const basis = base && snapshot.price_basis === SETTLEMENT_BASIS && toNumber(base[SETTLEMENT_BASIS]) !== null ? SETTLEMENT_BASIS : undefined;
+    return attachActualOutcomes(row, base ? Number(base[SETTLEMENT_BASIS]) : NaN, history.records,
       { source: history.data_source, source_observed_at: history.source_observed_at, price_basis: basis });
   });
   if (JSON.stringify(next) !== JSON.stringify(records)) await writeCloudLedger(symbol, next);
