@@ -33,10 +33,14 @@ class OutputService:
         last = forecast.iloc[-1]
         latest_price = float(cleaned["Price"].iloc[-1])
         quality = classify_signal_quality(best)
+        if first.get("Forecast_Status") == "fallback":
+            quality = "Low"
         risk = _read_first(run_dir / "risk_forecast_5d.csv")
         result = {
             "symbol": symbol,
             "best_model": best.get("Model"),
+            "model_forecast_status": first.get("Forecast_Status"),
+            "model_fallback_reason": first.get("Fallback_Reason"),
             "signal": actionable_signal(first.get("Predicted_Direction"), quality),
             "signal_quality": quality,
             "forecast_1d_return": first.get("Predicted_Return"),
@@ -109,7 +113,9 @@ class OutputService:
         cv_edge = best.get("CV_Directional_Edge")
         if pd.notna(cv_edge):
             lines.append(f"滚动验证方向优势为 {float(cv_edge):+.1f} 个百分点。")
-        if quality == "Low":
+        if first.get("Forecast_Status") == "fallback":
+            lines.append(f"本次模型使用回退预测（{first.get('Fallback_Reason')}），保持 Observe。")
+        elif quality == "Low":
             lines.append("当前信号为 Observe，因为滚动验证优势不足或历史输出缺少该验证指标。")
         return lines
 

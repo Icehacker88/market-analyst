@@ -189,10 +189,15 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
     latest_price = float(pd.read_csv(model_dir / "cleaned_prices.csv")["Price"].iloc[-1])
     five_day_return = float(last["Predicted_Price"]) / latest_price - 1
     quality = classify_signal_quality(best)
+    forecast_status = first.get("Forecast_Status", "ok")
+    if forecast_status == "fallback":
+        quality = "Low"
     result = {
         "Ticker": ticker,
         "Model_Dir": str(model_dir),
         "Best_Model": best["Model"],
+        "Model_Forecast_Status": forecast_status,
+        "Model_Fallback_Reason": first.get("Fallback_Reason", ""),
         "Forecast_1D_Return": first["Predicted_Return"],
         "Forecast_1D_Price": first["Predicted_Price"],
         "Forecast_1D_Direction": first["Predicted_Direction"],

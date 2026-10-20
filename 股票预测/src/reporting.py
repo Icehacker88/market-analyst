@@ -24,6 +24,8 @@ def write_summary(
     latest_forecast = forecast.iloc[0]
     five_day = forecast.iloc[-1]
     signal_quality = classify_signal_quality(best)
+    if latest_forecast.get("Forecast_Status") == "fallback":
+        signal_quality = "Low"
     signal = actionable_signal(latest_forecast["Predicted_Direction"], signal_quality)
     risk = risk_forecast.iloc[0] if risk_forecast is not None and not risk_forecast.empty else None
     latest_price = float(forecast.iloc[0]["Predicted_Price"]) / float(
@@ -52,6 +54,8 @@ def write_summary(
         "## 模型表现",
         "",
         f"- 当前最佳模型：{best['Model']}",
+        f"- 本次预测状态：{latest_forecast.get('Forecast_Status', 'ok')}；回退原因：{latest_forecast.get('Fallback_Reason') or '无'}",
+        f"- 训练内验证回退次数：{int(best.get('CV_Fallback_Count', 0))}",
         f"- RMSE：{best['RMSE']:.4f}",
         f"- MAE：{best['MAE']:.4f}",
         f"- MAPE：{best['MAPE']:.2f}%",

@@ -115,3 +115,22 @@ def test_api_limits_assets_to_three_and_returns_structured_error() -> None:
     response = client.post("/api/assets/resolve", json={"symbols": ["AAPL", "SPY", "QQQ", "NVDA"]})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_current_fallback_is_observe_even_with_strong_historical_cv(monkeypatch, tmp_path) -> None:
+    from app.services.outputs import OutputService
+    service = OutputService()
+    monkeypatch.setattr(service, "latest_run", lambda _: tmp_path)
+    prices = synthetic_prices()
+    prices["Price"] = prices["Close"]
+    prices.to_csv(tmp_path / "cleaned_prices.csv", index=False)
+    pd.DataFrame([{"Model": "ARIMA", "CV_Directional_Edge": 5, "CV_Balanced_Accuracy": 60}]).to_csv(tmp_path / "model_comparison.csv", index=False)
+    pd.DataFrame([{"Predicted_Return": .01, "Predicted_Price": 130, "Predicted_Direction": "Up",
+                   "Forecast_Status": "fallback", "Fallback_Reason": "non_convergence"}]).to_csv(tmp_path / "forecast_1d_5d.csv", index=False)
+    pd.DataFrame({"Date": ["2026-01-01"]}).to_csv(tmp_path / "best_model_predictions.csv", index=False)
+    result = service.latest_forecast("SPY")
+    assert result["signal"] == "Observe"
+    assert result["signal_quality"] == "Low"
+    assert result["model_forecast_status"] == "fallback"
+    assert result["model_fallback_reason"] == "non_convergence"
+    assert any("回退预测" in line for line in result["explanation"])

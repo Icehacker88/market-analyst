@@ -116,9 +116,10 @@ def _run_frame(
         feature_columns,
         train_ratio=config.train_ratio,
         include_arima=config.include_arima,
+        price_history=cleaned,
     )
     best_model = choose_best_model(trained_models, metrics)
-    forecast_model = refit_model_on_all_data(best_model, feature_data, feature_columns)
+    forecast_model = refit_model_on_all_data(best_model, feature_data, feature_columns, price_history=cleaned)
     forecast = forecast_future_returns(
         model=forecast_model,
         cleaned=cleaned,
@@ -136,6 +137,9 @@ def _run_frame(
         ignore_index=True,
     )
     all_predictions.to_csv(output_dir / "prediction_results.csv", index=False)
+    validation = pd.concat([model.validation_predictions for model in trained_models], ignore_index=True)
+    validation["Ticker"] = config.ticker
+    validation.to_csv(output_dir / "validation_predictions.csv", index=False)
     best_model.predictions.to_csv(output_dir / "best_model_predictions.csv", index=False)
     metrics.to_csv(output_dir / "model_comparison.csv", index=False)
     forecast.to_csv(output_dir / "forecast_1d_5d.csv", index=False)

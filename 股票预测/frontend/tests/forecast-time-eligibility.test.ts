@@ -26,11 +26,11 @@ beforeAll(async () => {
   const source = await readFile(`${root}functions/api/[[path]].ts`, "utf8");
   const marker = "return { handle, recordCacheMetric };";
   expect(source.split(marker)).toHaveLength(2);
-  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast };");
+  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast, recordCloudForecast };");
   const result = await build({ stdin: { contents: instrumented + `
 export default { async fetch(request) {
  const input = await request.json(); const writes=[];
- const store={ get:async()=>null, setJSON:async(key,value)=>{ if(input.failWrite || input.failAt === writes.length + 1)throw new Error("synthetic storage failure"); writes.push({key,value}); }, set:async()=>{}, delete:async()=>{}, list:async()=>({blobs:[]}) };
+ const store={ get:async(key)=>key.includes("ledger") ? (input.rows || []) : null, setJSON:async(key,value)=>{ if(input.failWrite || input.failAt === writes.length + 1)throw new Error("synthetic storage failure"); writes.push({key,value}); }, set:async()=>{}, delete:async()=>{}, list:async()=>({blobs:[]}) };
  const api=createApi({env:{},getStore:()=>store,getDeployStore:()=>store,sendEmail:async()=>false});
  let data;
  if(input.operation==="settle") data=api.attachActualOutcomes(input.row,input.base ?? 100,input.future,input.provenance,input.now);
@@ -38,6 +38,7 @@ export default { async fetch(request) {
  if(input.operation==="governance") data=api.evaluateModelGovernance("SPY",input.rows,input.previous || null);
  if(input.operation==="reconcile") data=await api.reconcileCloudLedger("SPY",input.rows);
  if(input.operation==="calendar") data={before:equitySession("2026-03-06"),after:equitySession("2026-03-09"),early:equitySession("2026-11-27")};
+ if(input.operation==="record") { await api.recordCloudForecast("SPY",input.forecast,input.frozenAt,input.publicationId); data=true; }
  if(input.operation==="freeze") { try {data=await api.freezeCloudForecast("SPY",input.forecast);}catch {data={failed:true};} }
  return Response.json({data,writes});
 } };`, loader: "ts", resolveDir: `${root}functions/api` }, bundle: true, write: false, format: "esm", platform: "browser", target: "es2022" });
@@ -117,6 +118,49 @@ describe("frozen forecast timing contract", () => {
     expect((await call("history", { rows: [legacy], backtest: true })).data.statistics[0].completed).toBe(1);
     const governance = (await call("governance", { rows: Array(30).fill(legacy), previous: { status: "rollback" } })).data;
     expect(governance.live_samples_all).toBe(0); expect(governance.active_model).toBe("Orivane Ensemble Safe Mode");
+  });
+  it("appends the first eligible same-day publication without overwriting intraday or legacy evidence", async () => {
+    const forecast = { symbol: "SPY", data_as_of: row().As_Of_Date, generated_at: row().Created_At,
+      evaluation_snapshot: row().Evaluation_Snapshot, forecast_1d_return: .02 };
+    const intraday = { ...row(), Created_At: "2026-09-02T18:00:00Z", Evaluation_Snapshot: null,
+      Actual_1D_Return: .1, Raw_Direction_Correct: 1, Publication_ID: "old" };
+    for (const existing of [intraday, { ...intraday, Created_At: row().Created_At }]) {
+      const original = structuredClone(existing);
+      const first = await call("record", { rows: [existing], forecast, frozenAt: row().Created_At, publicationId: "qualified" });
+      expect(first.writes).toHaveLength(1);
+      const records = first.writes[0].value;
+      expect(records).toHaveLength(2);
+      expect(records[0]).toEqual(original);
+      expect(qualifyForecast(records[1]).status).toBe("eligible");
+      for (const horizon of ["1D", "5D", "10D", "1M"]) expect(qualifyForecast(records[1], horizon).status).toBe("eligible");
+      // A retry or a later, different forecast cannot replace the accepted publication.
+      for (const generated_at of [row().Created_At, "2026-09-03T12:00:00Z"]) {
+        const candidate = { ...forecast, generated_at, forecast_1d_return: -.5,
+          evaluation_snapshot: { ...forecast.evaluation_snapshot, generated_at, frozen_at: generated_at } };
+        expect(qualifyForecast({ ...row(), Created_At: generated_at, Evaluation_Snapshot: candidate.evaluation_snapshot }).status).toBe("eligible");
+        const retry = await call("record", { rows: records, forecast: candidate,
+          frozenAt: generated_at, publicationId: "retry" });
+        expect(retry.writes).toEqual([]);
+      }
+      const history = (await call("history", { rows: records })).data;
+      expect(history.statistics[0]).toMatchObject({ eligible: 1, completed: 0, observed: 1, excluded: 1 });
+      const settled = (await call("settle", { row: records[1], future, provenance, now })).data;
+      const after = (await call("history", { rows: [original, settled] })).data;
+      expect(after.statistics[0]).toMatchObject({ eligible: 1, completed: 1, observed: 2, excluded: 1 });
+      expect((await call("record", { rows: [original, settled], forecast,
+        frozenAt: row().Created_At, publicationId: "after-settlement" })).writes).toEqual([]);
+    }
+  });
+  it("does not grow the ledger for repeated unqualified or unknown same-day publications", async () => {
+    for (const snapshot of [null, row().Evaluation_Snapshot]) {
+      const forecast = { symbol: "SPY", data_as_of: row().As_Of_Date, generated_at: row().Created_At, evaluation_snapshot: snapshot };
+      const result = await call("record", { rows: [{ ...row(), Evaluation_Snapshot: null }], forecast,
+        frozenAt: "2026-09-03T13:30:00Z", publicationId: "late" });
+      expect(result.writes).toEqual([]);
+    }
+    const result = await call("record", { rows: [row()], forecast: { symbol: "SPY", data_as_of: "2026-09-03",
+      generated_at: "2026-09-03T18:00:00Z" }, frozenAt: "2026-09-03T18:00:00Z", publicationId: "next-day" });
+    expect(result.writes[0].value).toHaveLength(2);
   });
   it("a failed forecast publication creates no ledger entry or fake acknowledgement", async () => {
     const forecast = { symbol: "SPY", data_as_of: row().As_Of_Date, generated_at: row().Created_At, evaluation_snapshot: row().Evaluation_Snapshot };

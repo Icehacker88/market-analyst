@@ -4686,10 +4686,9 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
   const asOfDate = String(forecast.data_as_of || "").slice(0, 10);
   if (!asOfDate) return;
   const records = await readCloudLedger(ticker);
-  if (records.some((row) => String(row.Ticker).toUpperCase() === ticker && String(row.As_Of_Date).slice(0, 10) === asOfDate)) return;
   const components = Array.isArray(forecast.model_components) ? forecast.model_components as Array<Record<string, unknown>> : [];
   const kronos = components.find((item) => String(item.model) === "Kronos-mini (Official)");
-  records.push({
+  const candidate: Record<string, unknown> = {
     Created_At: String(forecast.generated_at || ""),
     Publication_ID: publicationId,
     Evaluation_Snapshot: forecast.evaluation_snapshot ? { ...(forecast.evaluation_snapshot as EvaluationSnapshot), frozen_at: frozenAt } : null,
@@ -4717,7 +4716,14 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
     Kronos_Forecast_5D_Return: kronos?.forecast_5d_return ?? null,
     Kronos_Forecast_10D_Return: kronos?.forecast_10d_return ?? null,
     Kronos_Forecast_1M_Return: kronos?.forecast_1m_return ?? null,
-  });
+  };
+  const sameDay = records.filter((row) => String(row.Ticker).toUpperCase() === ticker && String(row.As_Of_Date).slice(0, 10) === asOfDate);
+  // Preserve the first observation (including legacy/invalid evidence), then admit
+  // the first fully qualified publication. Never replace predictions or outcomes.
+  // All horizons share the first target open under frozen-close-v1.
+  if (sameDay.length && (qualifyForecast(candidate).status !== "eligible"
+    || sameDay.some((row) => qualifyForecast(row).status === "eligible"))) return;
+  records.push(candidate);
   records.sort((left, right) => String(right.As_Of_Date).localeCompare(String(left.As_Of_Date)));
   await writeCloudLedger(ticker, records.slice(0, 260));
 }
