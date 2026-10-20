@@ -6,7 +6,14 @@ const RESPONSE_CACHE_PREFIX = "orivane-response-v2:";
 const INFLIGHT_GETS = new Map<string, Promise<unknown>>();
 
 // Only homepage public resources publish updates. Private/account requests are untouched.
-export type HomeResponsePath = "/api/home" | "/api/forecast/scoreboard?v=2";
+// Live scores follow the frozen-close timing contract. Versioned paths keep browser caches
+// (localStorage and IndexedDB, up to 24h stale) from serving responses scored the old way.
+export const EVALUATION_CONTRACT = "frozen-close-v1";
+export const SCOREBOARD_PATH = `/api/forecast/scoreboard?v=3&contract=${EVALUATION_CONTRACT}` as const;
+function contractPath(path: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}contract=${EVALUATION_CONTRACT}`;
+}
+export type HomeResponsePath = "/api/home" | typeof SCOREBOARD_PATH;
 export type HomeResponseEvent = {
   status: "loading" | "ready" | "stale" | "error";
   payload?: unknown;
@@ -297,7 +304,7 @@ export async function getHomeData(refresh = false): Promise<HomeData> {
 }
 
 export async function getForecastScoreboard(refresh = false): Promise<ForecastScoreboard> {
-  return (await request<{ data: ForecastScoreboard }>("/api/forecast/scoreboard?v=2", refresh ? { cache: "reload" } : undefined)).data;
+  return (await request<{ data: ForecastScoreboard }>(SCOREBOARD_PATH, refresh ? { cache: "reload" } : undefined)).data;
 }
 
 export async function getScreener(): Promise<ScreenerRow[]> {
@@ -473,7 +480,7 @@ export async function compareAssets(assets: Asset[], start: string): Promise<{ s
 }
 
 export async function getForecast(symbol: string, force = false): Promise<Forecast> {
-  const path = `/api/forecast/latest?symbol=${encodeURIComponent(symbol)}${force ? `&refresh=${Date.now()}` : ""}`;
+  const path = contractPath(`/api/forecast/latest?symbol=${encodeURIComponent(symbol)}${force ? `&refresh=${Date.now()}` : ""}`);
   const init = force ? { cache: "no-store" as const } : undefined;
   try {
     return (await request<{ data: Forecast }>(path, init)).data;
@@ -485,11 +492,11 @@ export async function getForecast(symbol: string, force = false): Promise<Foreca
 }
 
 export async function getPerformance(symbol: string): Promise<Performance> {
-  return (await request<{ data: Performance }>(`/api/performance/${encodeURIComponent(symbol)}`)).data;
+  return (await request<{ data: Performance }>(contractPath(`/api/performance/${encodeURIComponent(symbol)}`))).data;
 }
 
 export async function getPredictionHistory(symbol: string): Promise<PredictionHistory> {
-  return (await request<{ data: PredictionHistory }>(`/api/predictions/history/${encodeURIComponent(symbol)}`)).data;
+  return (await request<{ data: PredictionHistory }>(contractPath(`/api/predictions/history/${encodeURIComponent(symbol)}`))).data;
 }
 
 export async function runForecast(asset: Asset): Promise<Record<string, unknown>> {

@@ -1,3 +1,4 @@
+import { forecastLiveEvidence } from "./forecast-eligibility-view";
 import type { Forecast } from "./types";
 
 export type ForecastBrief = {
@@ -60,7 +61,7 @@ export function forecastBrief(forecast: Forecast, language: "zh" | "en", levels:
       ? (zh ? (weighted < -0.02 ? "中期偏弱下行" : "震荡偏空") : (weighted < -0.02 ? "Weakening downtrend" : "Range with downside bias"))
       : (zh ? "区间震荡" : "Range-bound");
 
-  const live = forecast.validation?.live;
+  const live = forecastLiveEvidence(forecast);
   const calibration = forecast.calibration;
   const backtest = forecast.validation?.backtest;
   const monthModel = forecast.horizon_models?.find((item) => item.horizon === "1M");
@@ -68,7 +69,7 @@ export function forecastBrief(forecast: Forecast, language: "zh" | "en", levels:
   let probabilityNote = zh ? "尚无足够历史样本" : "Not enough historical samples";
   if ((live?.samples ?? 0) >= 20 && finite(live?.direction_accuracy) !== null) {
     probability = finite(live?.direction_accuracy);
-    probabilityNote = zh ? `来自 ${live!.samples} 次真实冻结预测` : `From ${live!.samples} frozen live forecasts`;
+    probabilityNote = zh ? `来自 ${live!.samples} 次合格冻结预测` : `From ${live!.samples} qualified frozen forecasts`;
   } else if ((monthModel?.probability_samples ?? 0) >= 20 && finite(monthModel?.direction_probability) !== null) {
     probability = finite(monthModel?.direction_probability);
     probabilityNote = zh ? `来自 1 个月路由模型的 ${monthModel!.probability_samples} 个留出样本` : `From ${monthModel!.probability_samples} holdout samples for the 1M router`;

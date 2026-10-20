@@ -8,6 +8,7 @@ import { compactChatThread, conversationForApi, createChatMessage, dedupeChatMes
 import { displayAssetName } from "@/lib/assets";
 import { trackEvent } from "@/lib/analytics";
 import { directionalLevels, forecastBrief, type DirectionalLevels } from "@/lib/forecast-brief";
+import { forecastLiveEvidence, isCounted, qualifiedStats, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
 import { forecastCredibility, predictionScore } from "@/lib/forecast-credibility";
 import { forecastDecision } from "@/lib/forecast-decision";
 import { forecastPassport, type ForecastPassportState } from "@/lib/forecast-passport";
@@ -15,7 +16,7 @@ import type { DetailTab } from "@/lib/dashboard-state";
 import { formatMetricPercent, formatNumber, formatPercent } from "@/lib/format";
 import { localizeModel, localizeQuality, localizeSignal } from "@/lib/i18n";
 import { nextReviewDate, reviewReasonLabel, reviewReasonOrder, triggerPriceFor } from "@/lib/research-review";
-import type { AiAnalysis, AiChatMessage, Asset, CompanyResearch as Research, DecisionProfile, Forecast, History, Performance, PredictionHistory } from "@/lib/types";
+import type { AiAnalysis, AiChatMessage, Asset, CompanyResearch as Research, DecisionProfile, Forecast, History, LedgerRecord, Performance, PredictionHistory } from "@/lib/types";
 import { AdvancedMarketChart } from "./advanced-market-chart";
 import { AssetLogo } from "./asset-logo";
 import { CompanyResearch } from "./company-research";
@@ -62,7 +63,7 @@ export function DetailPanel({
   const [taskError, setTaskError] = useState("");
   const favorite = isFavorite(asset.symbol);
   const latest = history?.records.at(-1);
-  const stats = (predictions?.live?.statistics || predictions?.statistics)?.find((item) => item.window === "All");
+  const stats = qualifiedStats(predictions?.live?.statistics || predictions?.statistics).find((item) => item.window === "All");
   const aiChatKey = `${asset.symbol}:${language}`;
   const aiThread = userState.ai_chats?.[aiChatKey];
   const aiMessages = dedupeChatMessages(aiThread?.messages || []);
@@ -261,7 +262,7 @@ export function PredictionHero({ forecast, history, performance, stats, onOpenEv
       </section>
       <div className="prediction-hero-grid">
         <article><small>{zh ? "操作参考" : "Action reference"}</small><strong className={posture.className}>{zh ? action?.label_zh || posture.label : action?.label_en || posture.label}</strong><span>{zh ? action?.summary_zh || posture.body : action?.summary_en || posture.body}</span></article>
-        <article><small>{zh ? "走步验证优势" : "Walk-forward edge"}</small><strong className={Number(validation?.backtest.direction_edge ?? 0) > 0 ? "positive" : "negative"}>{formatMetricPercent(validation?.backtest.direction_edge, true)}</strong><span>{zh ? `回测 ${validation?.backtest.samples ?? 0} · 真实冻结 ${validation?.live.samples ?? 0}` : `Backtest ${validation?.backtest.samples ?? 0} · frozen live ${validation?.live.samples ?? 0}`}</span></article>
+        <article><small>{zh ? "走步验证优势" : "Walk-forward edge"}</small><strong className={Number(validation?.backtest.direction_edge ?? 0) > 0 ? "positive" : "negative"}>{formatMetricPercent(validation?.backtest.direction_edge, true)}</strong><span>{zh ? `回测 ${validation?.backtest.samples ?? 0} · 合格冻结 ${forecastLiveEvidence(forecast)?.samples ?? "—"}` : `Backtest ${validation?.backtest.samples ?? 0} · qualified frozen ${forecastLiveEvidence(forecast)?.samples ?? "—"}`}</span></article>
         <article><small>{zh ? "相似信号" : "Similar signals"}</small><strong>{formatMetricPercent(calibration?.direction_hit_rate)}</strong><span>{zh ? `样本 ${calibration?.sample_size ?? 0} / ${calibration?.total_samples ?? 0}` : `Sample ${calibration?.sample_size ?? 0} / ${calibration?.total_samples ?? 0}`}</span></article>
         <article><small>{zh ? "失效价位" : "Invalidation"}</small><strong>{formatNumber(forecast.key_levels?.invalidation)}</strong><span>{zh ? forecast.key_levels?.invalidation_zh || "等待更多数据" : forecast.key_levels?.invalidation_en || "Waiting for more data"}</span></article>
         <article><small>{t("nextDay")}</small><strong>{formatPercent(forecast.forecast_1d_return, true)}</strong><span>{formatNumber(forecast.forecast_1d_price)}</span></article>
@@ -410,7 +411,7 @@ function ForecastView({ asset, forecast, history, performance, predictions, pred
         [t("majorityBaseline"), formatMetricPercent(stats?.majority_baseline_accuracy)],
         [language === "zh" ? "走步验证样本" : "Walk-forward samples", String(validation?.backtest.samples ?? 0)],
         [language === "zh" ? "走步方向优势" : "Walk-forward edge", formatMetricPercent(validation?.backtest.direction_edge, true)],
-        [language === "zh" ? "真实冻结样本" : "Frozen live samples", String(validation?.live.samples ?? 0)],
+        [language === "zh" ? "合格冻结样本" : "Qualified frozen samples", String(forecastLiveEvidence(forecast)?.samples ?? "—")],
       ]} />
       <div className="explanation">
         <h3>{t("explanation")}</h3>
@@ -481,7 +482,7 @@ function ForecastEvolution({ forecast, predictions, loading }: { forecast: Forec
   </section>;
 }
 
-function ledgerNumber(row: Record<string, number | string | boolean | null> | undefined, key: string, fallback: number | null): number | null {
+function ledgerNumber(row: LedgerRecord | undefined, key: string, fallback: number | null): number | null {
   const value = row?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -622,11 +623,11 @@ function aiAnalysisText(analysis: AiAnalysis, language: "zh" | "en", followUp = 
   ].join("\n\n");
 }
 
-function PerformanceView({ performance }: { performance?: Performance }) {
+export function PerformanceView({ performance }: { performance?: Performance }) {
   const { language, t } = useApp();
   if (!performance) return <EmptyState />;
   const best = performance.backtest.best;
-  const live = performance.live_predictions.statistics.find((item) => item.window === "All");
+  const live = qualifiedStats(performance.live_predictions.statistics).find((item) => item.window === "All");
   const models = performance.backtest.models || [];
   const horizons = (performance.backtest.horizon_statistics || []).filter((item) => item.window === "All");
   return <div className="performance-stack"><div className="performance-grid"><section><h3>{t("backtest")}</h3><MetricList items={[
@@ -634,7 +635,7 @@ function PerformanceView({ performance }: { performance?: Performance }) {
     ["R²", formatNumber(best.R2, 3)], [t("directionAccuracy"), formatMetricPercent(best.Directional_Accuracy)], [t("majorityBaseline"), formatMetricPercent(best.Majority_Baseline_Accuracy)],
     [t("directionEdge"), formatMetricPercent(best.Directional_Edge, true)], [t("testSamples"), String(performance.backtest.test_samples)],
   ]} /></section><section><h3>{t("live")}</h3><MetricList items={[
-    [t("completed"), String(live?.completed ?? 0)], [t("pending"), String(live?.pending ?? 0)], [t("directionAccuracy"), formatMetricPercent(live?.direction_accuracy)],
+    [t("completed"), live ? String(live.completed) : "—"], ...(typeof live?.excluded === "number" ? [[language === "zh" ? "有结果但不计入" : "Outcome, not counted", String(live.excluded)] as [string, string]] : []), [t("pending"), live ? String(live.pending) : "—"], [t("directionAccuracy"), formatMetricPercent(live?.direction_accuracy)],
     [t("majorityBaseline"), formatMetricPercent(live?.majority_baseline_accuracy)], [t("directionEdge"), formatMetricPercent(live?.direction_edge, true)], [t("mae"), formatPercent(live?.mean_absolute_return_error)],
   ]} /><p className="notice">{t("historyNotice")}</p></section></div>
     {models.length > 1 ? <section className="model-comparison"><h3>{language === "zh" ? "模型对比" : "Model comparison"}</h3><div className="table-wrap"><table><thead><tr><th>{t("tableModel")}</th><th>{t("directionAccuracy")}</th><th>{t("majorityBaseline")}</th><th>{t("directionEdge")}</th><th>Return RMSE</th><th>{t("testSamples")}</th></tr></thead><tbody>{models.map((model) => <tr key={String(model.Model)}><td>{localizeModel(String(model.Model), language)}</td><td>{formatMetricPercent(model.Directional_Accuracy)}</td><td>{formatMetricPercent(model.Majority_Baseline_Accuracy)}</td><td>{formatMetricPercent(model.Directional_Edge, true)}</td><td>{formatPercent(model.Return_RMSE)}</td><td>{String(model.Samples ?? "—")}</td></tr>)}</tbody></table></div></section> : null}
@@ -642,14 +643,15 @@ function PerformanceView({ performance }: { performance?: Performance }) {
   </div>;
 }
 
-function HistoryView({ predictions }: { predictions?: PredictionHistory }) {
+export function HistoryView({ predictions }: { predictions?: PredictionHistory }) {
   const { language, t } = useApp();
   const [source, setSource] = useState<"live" | "backtest" | "legacy">("live");
   if (!predictions) return <EmptyState />;
   const section = predictions[source] || { ...predictions, symbol: predictions.symbol };
   const data = section.charts.rolling_accuracy || [];
-  const validation = section.records.filter((row) => row.Verified && typeof row.Actual_1D_Return === "number").slice(0, 40).reverse();
-  const allStats = section.statistics.find((item) => item.window === "All");
+  const counted = (row: LedgerRecord) => source === "backtest" ? row.Verified === true : isCounted(row, "1D");
+  const validation = section.records.filter((row) => counted(row) && typeof row.Actual_1D_Return === "number").slice(0, 40).reverse();
+  const allStats = (source === "backtest" ? section.statistics : qualifiedStats(section.statistics)).find((item) => item.window === "All");
   const labels = {
     live: language === "zh" ? "真实冻结预测" : "Frozen live predictions",
     backtest: language === "zh" ? "走步回测" : "Walk-forward backtest",
@@ -657,10 +659,10 @@ function HistoryView({ predictions }: { predictions?: PredictionHistory }) {
   };
   return <div className="history-layout">
     <div className="history-source-tabs" role="tablist" aria-label={language === "zh" ? "验证数据来源" : "Validation source"}>{(["live", "backtest", "legacy"] as const).map((item) => <button key={item} role="tab" aria-selected={source === item} className={source === item ? "active" : ""} onClick={() => setSource(item)}>{labels[item]}<small>{predictions[item]?.records.length ?? 0}</small></button>)}</div>
-    <p className="notice">{source === "live" ? (language === "zh" ? "仅统计当时冻结、事后补齐真实结果的线上预测。" : "Only forecasts frozen at the time and later reconciled with actual outcomes are counted.") : source === "backtest" ? (language === "zh" ? "按时间顺序滚动训练和验证，不与真实线上样本混合。" : "Models are evaluated in chronological walk-forward order and are not mixed with live records.") : (language === "zh" ? "旧版模型记录单独保留，不纳入当前模型可信度。" : "Legacy model records are retained separately and do not determine current credibility.")}</p>
-    <div className="history-stat-strip"><span><small>{t("completed")}</small><strong>{allStats?.completed ?? 0}</strong></span><span><small>{t("directionAccuracy")}</small><strong>{formatMetricPercent(allStats?.direction_accuracy)}</strong></span><span><small>{t("majorityBaseline")}</small><strong>{formatMetricPercent(allStats?.majority_baseline_accuracy)}</strong></span><span><small>{t("directionEdge")}</small><strong>{formatMetricPercent(allStats?.direction_edge, true)}</strong></span></div>
-    {validation.length ? <section className="validation-chart"><h3>{t("forecastVsActual")}</h3><UnifiedLineChart height={220} rows={validation.map((row) => ({ ...row, Forecast_1D_Return: Number(row.Forecast_1D_Return) * 100, Actual_1D_Return: Number(row.Actual_1D_Return) * 100 }))} xKey="As_Of_Date" percent showLegend series={[{ key: "Forecast_1D_Return", name: t("tableForecast"), color: "#d08c2d" }, { key: "Actual_1D_Return", name: t("tableActual"), color: "#117a72" }]} /></section> : data.length ? <UnifiedLineChart height={220} rows={data} xKey="As_Of_Date" percent domain={[0, 100]} showLegend series={[{ key: "Rolling_Accuracy_20", name: language === "zh" ? "近 20 次准确率" : "Rolling accuracy", color: "#117a72" }, { key: "Cumulative_Accuracy", name: language === "zh" ? "累计准确率" : "Cumulative accuracy", color: "#d08c2d" }]} /> : <EmptyState message={language === "zh" ? "该来源暂时没有已完成验证的样本。" : "This source has no completed validation samples yet."} />}
-    <div className="table-wrap"><table><thead><tr><th>{t("tableDate")}</th><th>{t("tableModel")}</th><th>1D {t("tableForecast")}</th><th>1D {t("tableActual")}</th><th>5D {t("tableActual")}</th><th>10D {t("tableActual")}</th><th>1M {t("tableActual")}</th><th>{t("tableHit")}</th></tr></thead><tbody>{section.records.slice(0, 20).map((row, index) => <tr key={`${row.As_Of_Date}-${row.Best_Model}-${index}`}><td>{String(row.As_Of_Date)}</td><td>{localizeModel(String(row.Best_Model), language)}</td><td>{formatPercent(row.Forecast_1D_Return, true)}</td><td>{formatPercent(row.Actual_1D_Return, true)}</td><td>{formatPercent(row.Actual_5D_Return, true)}</td><td>{formatPercent(row.Actual_10D_Return, true)}</td><td>{formatPercent(row.Actual_1M_Return, true)}</td><td>{row.Verified ? (Number(row.Raw_Direction_Correct) ? "✓" : "×") : "—"}</td></tr>)}</tbody></table></div>
+    <p className="notice">{source !== "backtest" ? (language === "zh" ? "只统计通过时间资格的冻结预测（基准日收盘后生成、目标交易日开盘前冻结），按不含分红的价格收益结算；不计入的记录保留在下表并注明状态。" : "Only time-qualified frozen forecasts count (generated after the base close, frozen before the target open), settled as price returns excluding dividends; excluded records stay in the table with their status.") : source === "backtest" ? (language === "zh" ? "按时间顺序滚动训练和验证，不与真实线上样本混合。" : "Models are evaluated in chronological walk-forward order and are not mixed with live records.") : (language === "zh" ? "旧版模型记录单独保留，不纳入当前模型可信度。" : "Legacy model records are retained separately and do not determine current credibility.")}</p>
+    <div className="history-stat-strip"><span><small>{t("completed")}</small><strong>{allStats ? allStats.completed : "—"}</strong></span><span><small>{t("directionAccuracy")}</small><strong>{formatMetricPercent(allStats?.direction_accuracy)}</strong></span><span><small>{t("majorityBaseline")}</small><strong>{formatMetricPercent(allStats?.majority_baseline_accuracy)}</strong></span><span><small>{t("directionEdge")}</small><strong>{formatMetricPercent(allStats?.direction_edge, true)}</strong></span></div>
+    {validation.length ? <section className="validation-chart"><h3>{t("forecastVsActual")}</h3><UnifiedLineChart height={220} rows={validation.map((row) => ({ ...row, Forecast_1D_Return: Number(row.Forecast_1D_Return) * 100, Actual_1D_Return: Number(row.Actual_1D_Return) * 100 }))} xKey="As_Of_Date" percent showLegend series={[{ key: "Forecast_1D_Return", name: t("tableForecast"), color: "#d08c2d" }, { key: "Actual_1D_Return", name: t("tableActual"), color: "#117a72" }]} /></section> : data.length && (source === "backtest" || allStats) ? <UnifiedLineChart height={220} rows={data} xKey="As_Of_Date" percent domain={[0, 100]} showLegend series={[{ key: "Rolling_Accuracy_20", name: language === "zh" ? "近 20 次准确率" : "Rolling accuracy", color: "#117a72" }, { key: "Cumulative_Accuracy", name: language === "zh" ? "累计准确率" : "Cumulative accuracy", color: "#d08c2d" }]} /> : <EmptyState message={source !== "backtest" && !allStats ? (language === "zh" ? "该来源的统计口径未确认，暂不展示成绩。" : "This source's scoring protocol is unconfirmed, so no scores are shown.") : (language === "zh" ? "该来源暂时没有已完成验证的样本。" : "This source has no completed validation samples yet.")} />}
+    <div className="table-wrap"><table><thead><tr><th>{t("tableDate")}</th><th>{t("tableModel")}</th><th>1D {t("tableForecast")}</th><th>1D {t("tableActual")}</th><th>5D {t("tableActual")}</th><th>10D {t("tableActual")}</th><th>1M {t("tableActual")}</th><th>{t("tableHit")}</th></tr></thead><tbody>{section.records.slice(0, 20).map((row, index) => <tr key={`${row.As_Of_Date}-${row.Best_Model}-${index}`}><td>{String(row.As_Of_Date)}</td><td>{localizeModel(String(row.Best_Model), language)}</td><td>{formatPercent(row.Forecast_1D_Return, true)}</td><td>{formatPercent(row.Actual_1D_Return, true)}</td><td>{formatPercent(row.Actual_5D_Return, true)}</td><td>{formatPercent(row.Actual_10D_Return, true)}</td><td>{formatPercent(row.Actual_1M_Return, true)}</td><td>{counted(row) ? (Number(row.Raw_Direction_Correct) ? "✓" : "×") : source === "backtest" ? "—" : <span className={`record-state ${recordState(row, "1D")}`} title={reasonLabel(stateReasonCode(row, "1D"), language === "zh") || undefined}>{stateLabel(recordState(row, "1D"), language === "zh")}</span>}</td></tr>)}</tbody></table></div>
   </div>;
 }
 
@@ -723,8 +725,9 @@ function personalizedDecisionAdvice(forecast: Forecast, history: History, score:
   const upside = Number(levels.upside);
   const entry = Number(profile.entry_price);
   const pnl = Number.isFinite(entry) && entry > 0 && currentPrice > 0 ? currentPrice / entry - 1 : null;
-  const liveSamples = Number(forecast.validation?.live.samples ?? 0);
-  const liveEdge = Number(forecast.validation?.live.direction_edge ?? 0);
+  const liveEvidence = forecastLiveEvidence(forecast);
+  const liveSamples = Number(liveEvidence?.samples ?? 0);
+  const liveEdge = Number(liveEvidence?.direction_edge ?? 0);
   const validated = forecast.action?.actionable === true
     && score >= 55
     && Number(forecast.validation?.backtest.direction_edge ?? 0) > 0
