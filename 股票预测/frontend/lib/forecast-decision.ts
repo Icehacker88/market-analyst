@@ -55,6 +55,10 @@ export function forecastDecision(forecast: Forecast, evidenceScore: number, lang
     reason = zh
       ? "近期或历史验证未优于简单基准，数值走势仅供研究，等待新的正优势证据。"
       : "Recent or historical validation has not beaten the simple baseline, so the numeric path is research-only until positive edge returns.";
+  } else if (liveEvidence === null) {
+    reason = zh
+      ? "这条预测生成于时间资格协议之前，实盘样本口径未确认；在确认之前不把数值预测解释为操作信号。"
+      : "This forecast predates the timing protocol, so its live sample count is unconfirmed; numeric forecasts are not treated as action signals until it is.";
   } else if (liveSamples < 20 || action?.evidence_status === "insufficient") {
     reason = zh
       ? `合格冻结样本仅 ${liveSamples} 个，达到验证门槛前不把数值预测解释为操作信号。`

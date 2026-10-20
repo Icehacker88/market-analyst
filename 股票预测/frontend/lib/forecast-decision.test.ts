@@ -43,7 +43,7 @@ describe("forecast decision", () => {
   it("ignores live evidence from a forecast produced before the timing contract", () => {
     const waiting: Partial<Forecast> = { action: { stance: "accumulate", actionable: false, evidence_status: "validated", label_zh: "关注", label_en: "Watch", summary_zh: "", summary_en: "" } };
     // Same 25 live samples: trusted only when the forecast carries the contract's snapshot.
-    expect(forecastDecision(fixture({ ...waiting, evaluation_snapshot: undefined }), 62, "zh").reason).toContain("合格冻结样本仅 0 个");
+    expect(forecastDecision(fixture({ ...waiting, evaluation_snapshot: undefined }), 62, "zh").reason).toContain("实盘样本口径未确认");
     expect(forecastDecision(fixture(waiting), 62, "zh").reason).not.toContain("合格冻结样本仅");
   });
 });
