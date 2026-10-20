@@ -140,7 +140,7 @@ export type ForecastScoreboard = NonNullable<HomeData["scoreboard"]> & {
   methodology: Record<string, boolean | string>;
   per_asset: ForecastScoreAsset[];
   monitored_symbols?: string[];
-  recent_live_records?: Record<string, number | string | boolean | null>[];
+  recent_live_records?: LedgerRecord[];
 };
 
 export type RecommendationGroup = {
@@ -623,11 +623,21 @@ export type Performance = {
   };
 };
 
+// Ledger rows carry nested objects (Time_Eligibility, Outcome_Observed, Settlement_Status, snapshots).
+export type LedgerRecord = Record<string, unknown>;
+
 export type LedgerStat = {
   horizon?: string;
   window: string;
   completed: number;
   pending: number;
+  // frozen-close-v1 coverage (live only): eligible + ineligible + unknown = input records.
+  protocol?: string;
+  observed?: number;
+  eligible?: number;
+  ineligible?: number;
+  unknown?: number;
+  excluded?: number;
   direction_accuracy?: number | null;
   majority_baseline_accuracy?: number | null;
   direction_edge?: number | null;
@@ -641,7 +651,7 @@ export type PredictionHistory = {
   symbol: string;
   notice: string;
   statistics: LedgerStat[];
-  records: Record<string, number | string | boolean | null>[];
+  records: LedgerRecord[];
   charts: {
     scatter: Record<string, number | string | null>[];
     timeline: Record<string, number | string | null>[];
@@ -658,6 +668,6 @@ export type PredictionLedgerSection = {
   notice: string;
   statistics: LedgerStat[];
   horizon_statistics?: LedgerStat[];
-  records: Record<string, number | string | boolean | null>[];
+  records: LedgerRecord[];
   charts: PredictionHistory["charts"];
 };

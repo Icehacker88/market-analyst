@@ -55,8 +55,8 @@ export function forecastDecision(forecast: Forecast, evidenceScore: number, lang
       : "Recent or historical validation has not beaten the simple baseline, so the numeric path is research-only until positive edge returns.";
   } else if (liveSamples < 20 || action?.evidence_status === "insufficient") {
     reason = zh
-      ? `真实冻结样本仅 ${liveSamples} 个，达到验证门槛前不把数值预测解释为操作信号。`
-      : `Only ${liveSamples} frozen live samples are available; numeric forecasts are not treated as action signals before the evidence gate is met.`;
+      ? `合格冻结样本仅 ${liveSamples} 个，达到验证门槛前不把数值预测解释为操作信号。`
+      : `Only ${liveSamples} qualified frozen samples are available; numeric forecasts are not treated as action signals before the evidence gate is met.`;
   } else if (evidenceScore < 55) {
     reason = zh
       ? `证据质量 ${evidenceScore}/100，尚未达到操作门槛。`
