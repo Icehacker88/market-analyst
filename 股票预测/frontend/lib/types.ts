@@ -389,6 +389,7 @@ export type CompareSeries = {
 export type PeriodReturns = { symbol: string; data_as_of: string; returns: Record<string, number | null>; long_term_complete?: boolean };
 
 export type Forecast = {
+  evaluation_snapshot?: { schema_version?: string } | null;
   symbol: string;
   best_model: string;
   base_price?: number | null;

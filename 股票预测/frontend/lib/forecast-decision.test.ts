@@ -8,6 +8,7 @@ function fixture(overrides: Partial<Forecast> = {}): Forecast {
     forecast_1d_return: 0.01, forecast_1d_price: 101, forecast_1d_direction: "Up",
     forecast_5d_return: 0.03, forecast_5d_price: 103, forecast_days: [], generated_at: "2026-08-05T00:00:00Z", data_as_of: "2026-08-04",
     validation_sample_size: 120, beats_majority_baseline: true, explanation: [],
+    evaluation_snapshot: { schema_version: "frozen-close-v1" },
     action: { stance: "accumulate", actionable: true, evidence_status: "validated", label_zh: "关注", label_en: "Watch", summary_zh: "", summary_en: "" },
     validation: {
       backtest: { method: "walk_forward", samples: 120, direction_accuracy: 58, majority_baseline_accuracy: 52, direction_edge: 6, return_mae: 0.01, return_rmse: 0.02 },
@@ -37,5 +38,12 @@ describe("forecast decision", () => {
     expect(decision.actionable).toBe(false);
     expect(decision.title).toBe("等待确认");
     expect(decision.reason).toContain("未优于简单基准");
+  });
+
+  it("ignores live evidence from a forecast produced before the timing contract", () => {
+    const waiting: Partial<Forecast> = { action: { stance: "accumulate", actionable: false, evidence_status: "validated", label_zh: "关注", label_en: "Watch", summary_zh: "", summary_en: "" } };
+    // Same 25 live samples: trusted only when the forecast carries the contract's snapshot.
+    expect(forecastDecision(fixture({ ...waiting, evaluation_snapshot: undefined }), 62, "zh").reason).toContain("合格冻结样本仅 0 个");
+    expect(forecastDecision(fixture(waiting), 62, "zh").reason).not.toContain("合格冻结样本仅");
   });
 });

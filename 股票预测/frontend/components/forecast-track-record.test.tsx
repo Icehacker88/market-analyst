@@ -67,4 +67,37 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
     await waitFor(() => expect(screen.getByText("实盘合格样本积累中（0/20）")).toBeInTheDocument());
     expect(screen.getAllByText("等待合格样本").length).toBe(4);
   });
+
+  it("does not treat an old cached response as qualified or validated", async () => {
+    const oldLive = (horizon: string) => stat(horizon, { completed: 100, direction_accuracy: 60, majority_baseline_accuracy: 52, direction_edge: 8 });
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
+      live: { statistics: [oldLive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(oldLive) },
+      recent_live_records: [{ Symbol: "SPY", As_Of_Date: "2026-09-10", Best_Model: "Orivane Horizon Router", Forecast_1D_Return: 0.001, Actual_1D_Return: 0.002, Verified: true }] });
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("当前模型已通过基础验证门槛");
+    const qualified = within(container.querySelector(".score-summary") as HTMLElement).getByText("合格实盘样本").closest("article")!;
+    expect(qualified.querySelector("strong")!.textContent).toBe("—");
+    expect([...container.querySelectorAll(".record-state")].map((node) => node.textContent)).toEqual(["不计入"]);
+    expect(container.textContent).not.toContain("已计入（");
+  });
+
+  it.each([
+    ["30 qualified samples with a negative live edge", 30, -5, "当前模型尚未证明优于简单基准"],
+    ["20 qualified samples with zero live edge", 20, 0, "当前模型尚未证明优于简单基准"],
+    ["30 qualified samples with a missing live edge", 30, null, "实盘成绩暂不可判定"],
+    ["19 qualified samples", 19, 4, "实盘合格样本积累中（19/20）"],
+    ["30 qualified samples with a positive live edge", 30, 4, "当前模型已通过基础验证门槛"],
+  ])("banner for %s", async (_name, completed, edge, title) => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    const qualifiedLive = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", completed: completed as number, direction_edge: edge as number | null, observed: completed as number, eligible: completed as number, ineligible: 0, unknown: 0, excluded: 0 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
+      live: { statistics: [qualifiedLive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(qualifiedLive) } });
+    render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText(title as string)).toBeInTheDocument());
+    if (completed as number >= 20) expect(screen.queryByText(/实盘合格样本积累中/)).toBeNull();
+  });
 });

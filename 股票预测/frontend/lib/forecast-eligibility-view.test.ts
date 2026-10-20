@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { edgeClass, eligibilityCounts, reasonBreakdown, reasonLabel, recordState, stateReasonCode } from "./forecast-eligibility-view";
+import { edgeClass, eligibilityCounts, forecastLiveEvidence, isQualifiedStat, reasonBreakdown, reasonLabel, recordState, stateReasonCode } from "./forecast-eligibility-view";
+import type { Forecast } from "./types";
 
 const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1" }, "5D": { status, reason, protocol: "frozen-close-v1" } });
 
@@ -20,6 +21,14 @@ describe("frozen forecast eligibility view", () => {
   it("never counts a response without the timing contract, and explains settled-but-unproven outcomes", () => {
     expect(recordState({ Actual_1D_Return: 0.01 }, "1D")).toBe("excluded");
     expect(recordState({}, "1D")).toBe("unconfirmed");
+    // Old responses used Verified=true for "has an outcome"; that must not count.
+    const oldCached = { Verified: true, Actual_1D_Return: 0.01 };
+    expect(recordState(oldCached, "1D")).toBe("excluded");
+    expect(reasonLabel(stateReasonCode(oldCached, "1D"), true)).toBe("统计口径未确认（可能是旧版缓存）");
+    const otherProtocol = { Verified: true, Actual_1D_Return: 0.01, Time_Eligibility: { "1D": { status: "eligible", reason: "qualified", protocol: "frozen-close-v0" } } };
+    expect(recordState(otherProtocol, "1D")).toBe("excluded");
+    const ineligibleButVerified = { Verified: true, Actual_1D_Return: 0.01, Time_Eligibility: timing("ineligible", "published_after_target_open") };
+    expect(recordState(ineligibleButVerified, "1D")).toBe("excluded");
     const unproven = { Verified: false, Actual_1D_Return: 0.01, Time_Eligibility: timing("eligible", "qualified"), Outcome_Observed: { "1D": true } };
     expect(reasonLabel(stateReasonCode(unproven, "1D"), true)).toBe("缺少结算证据");
   });
@@ -45,5 +54,15 @@ describe("frozen forecast eligibility view", () => {
     expect(eligibilityCounts({ window: "All", completed: 0, pending: 0, hit_count: 0, miss_count: 0 })).toEqual({ observed: null, eligible: null, ineligible: null, unknown: null, excluded: null });
     expect(eligibilityCounts({ window: "All", completed: 0, pending: 0, hit_count: 0, miss_count: 0, observed: 49, excluded: 49, eligible: 0, ineligible: 22, unknown: 27 }).excluded).toBe(49);
     expect([edgeClass(null), edgeClass(undefined), edgeClass(2), edgeClass(-1)]).toEqual(["", "", "positive", "negative"]);
+  });
+
+  it("trusts live statistics and forecast evidence only under the timing contract", () => {
+    const base = { window: "All", completed: 100, pending: 0, hit_count: 60, miss_count: 40, direction_edge: 3 };
+    expect(isQualifiedStat(base)).toBe(false);
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1" })).toBe(true);
+    const live = { samples: 49, direction_accuracy: 44, majority_baseline_accuracy: 54, direction_edge: -10 };
+    const forecast = { validation: { live } } as unknown as Forecast;
+    expect(forecastLiveEvidence(forecast)).toBeNull();
+    expect(forecastLiveEvidence({ ...forecast, evaluation_snapshot: { schema_version: "frozen-close-v1" } } as Forecast)).toEqual(live);
   });
 });

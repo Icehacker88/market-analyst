@@ -1,10 +1,11 @@
-import type { LedgerRecord, LedgerStat } from "./types";
+import type { Forecast, LedgerRecord, LedgerStat } from "./types";
 
 // Display helpers for the frozen-close-v1 timing contract (see docs/forecast-time-phase1-2026-10-19.md).
 // Only "counted" records feed live accuracy; every other record stays visible with its reason.
 export type RecordState = "counted" | "excluded" | "awaiting" | "unconfirmed";
 
 export const QUALIFIED_SAMPLE_GOAL = 20;
+export const SUPPORTED_PROTOCOL = "frozen-close-v1";
 
 const VERIFIED_FIELD: Record<string, string> = { "1D": "Verified", "5D": "Verified_5D", "10D": "Verified_10D", "1M": "Verified_1M" };
 
@@ -29,6 +30,7 @@ const REASONS: Record<string, [string, string]> = {
   base_price_revised: ["基准价格被改写（如拆股）", "Base price was revised (for example a split)"],
   target_price_invalid: ["目标价格无效", "Target price is invalid"],
   outcome_evidence_missing: ["缺少结算证据", "Settlement evidence is missing"],
+  protocol_unconfirmed: ["统计口径未确认（可能是旧版缓存）", "Scoring protocol unconfirmed (possibly an old cached response)"],
 };
 
 type Qualification = { status?: string; reason?: string };
@@ -38,19 +40,20 @@ function objectField(row: LedgerRecord, key: string): Record<string, unknown> | 
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+// Only a supported protocol's per-horizon verdict is trusted; anything else is unconfirmed.
 export function qualification(row: LedgerRecord, horizon: string): Qualification | null {
-  const entry = objectField(row, "Time_Eligibility")?.[horizon];
-  return entry && typeof entry === "object" ? entry as Qualification : null;
+  const entry = objectField(row, "Time_Eligibility")?.[horizon] as (Qualification & { protocol?: string }) | undefined;
+  return entry && typeof entry === "object" && entry.protocol === SUPPORTED_PROTOCOL ? entry : null;
 }
 
 export function recordState(row: LedgerRecord, horizon: string): RecordState {
   const actual = row[horizon === "1D" ? "Actual_1D_Return" : `Actual_${horizon}_Return`];
   const observedFlag = objectField(row, "Outcome_Observed")?.[horizon];
   const observed = typeof observedFlag === "boolean" ? observedFlag : typeof actual === "number";
-  if (row[VERIFIED_FIELD[horizon] || "Verified"] === true) return "counted";
   const status = qualification(row, horizon)?.status;
-  // Responses from before the timing contract carry no Time_Eligibility: nothing can be counted.
+  // Old responses used Verified=true for "has an outcome"; without the contract nothing counts.
   if (!status) return observed ? "excluded" : "unconfirmed";
+  if (status === "eligible" && row[VERIFIED_FIELD[horizon] || "Verified"] === true) return "counted";
   if (observed || status === "ineligible") return "excluded";
   return status === "eligible" ? "awaiting" : "unconfirmed";
 }
@@ -63,12 +66,32 @@ export function stateReasonCode(row: LedgerRecord, horizon: string): string | nu
     return typeof settlement === "string" && settlement !== "settled" ? settlement : "awaiting_target_close";
   }
   const timing = qualification(row, horizon);
-  if (timing?.status === "eligible") {
+  if (!timing) return "protocol_unconfirmed";
+  if (timing.status === "eligible") {
     // Timing passed but the outcome lacks frozen settlement evidence.
     const settlement = objectField(row, "Settlement_Status")?.[horizon];
     return typeof settlement === "string" && settlement !== "settled" ? settlement : "outcome_evidence_missing";
   }
-  return timing?.reason || "legacy_snapshot_missing";
+  return timing.reason || "legacy_snapshot_missing";
+}
+
+export function isCounted(row: LedgerRecord, horizon: string): boolean {
+  return recordState(row, horizon) === "counted";
+}
+
+// Live statistics count as qualified evidence only when scored under the supported protocol.
+export function isQualifiedStat(stat: LedgerStat | undefined): stat is LedgerStat {
+  return stat?.protocol === SUPPORTED_PROTOCOL;
+}
+
+export function qualifiedStats(stats: LedgerStat[] | undefined): LedgerStat[] {
+  return (stats || []).filter(isQualifiedStat);
+}
+
+// A forecast's live evidence is trusted only if the forecast itself was produced under the
+// contract (it then carries evaluation_snapshot); older cached forecasts used contaminated counts.
+export function forecastLiveEvidence(forecast: Forecast): NonNullable<Forecast["validation"]>["live"] | null {
+  return forecast.evaluation_snapshot?.schema_version === SUPPORTED_PROTOCOL ? forecast.validation?.live ?? null : null;
 }
 
 export function reasonLabel(code: string | null, zh: boolean): string {

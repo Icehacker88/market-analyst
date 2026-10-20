@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { getForecastScoreboard } from "@/lib/api";
 import { trackEvent } from "@/lib/analytics";
 import { forecastTrend, type ForecastTrend } from "@/lib/forecast-trend";
-import { edgeClass, eligibilityCounts, QUALIFIED_SAMPLE_GOAL, reasonBreakdown, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
+import { edgeClass, eligibilityCounts, QUALIFIED_SAMPLE_GOAL, qualifiedStats, reasonBreakdown, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
 import { formatMetricPercent } from "@/lib/format";
 import { localizeModel } from "@/lib/i18n";
 import type { ForecastScoreAsset, ForecastScoreboard, LedgerRecord, LedgerStat } from "@/lib/types";
@@ -50,18 +50,25 @@ export function ForecastTrackRecord() {
   if (loading) return <main className="page-shell score-page"><Skeleton rows={6} /></main>;
   if (!data) return <main className="page-shell score-page"><EmptyState message={zh ? "预测成绩暂时不可用。" : "Forecast record is temporarily unavailable."} /></main>;
   const backtest = all(data.backtest.statistics);
-  const live = all(data.live.statistics);
+  // Live statistics without the timing protocol (e.g. an old cached response) are not evidence.
+  const liveStats = qualifiedStats(data.live.statistics);
+  const live = all(liveStats);
+  const liveKnown = Boolean(live);
   const backtestEdge = Number(backtest?.direction_edge);
-  const liveEdge = Number(live?.direction_edge);
+  const liveEdge = typeof live?.direction_edge === "number" && Number.isFinite(live.direction_edge) ? live.direction_edge : null;
   const liveSamples = live?.completed ?? 0;
+  const liveEnough = liveKnown && liveSamples >= QUALIFIED_SAMPLE_GOAL;
   const liveCounts = eligibilityCounts(live);
   const backtestTrend = forecastTrend(data.backtest.statistics);
-  const liveTrend = forecastTrend(data.live.statistics);
-  const overallState = backtestEdge > 0 && liveSamples >= 20 && liveEdge > 0
+  const liveTrend = forecastTrend(liveStats);
+  // "building" only means too few qualified samples; enough samples without positive edge is a verdict.
+  const overallState = backtestEdge > 0 && liveEnough && liveEdge !== null && liveEdge > 0
     ? "validated"
-    : Number.isFinite(backtestEdge) && backtestEdge <= 0
+    : (Number.isFinite(backtestEdge) && backtestEdge <= 0) || (liveEnough && liveEdge !== null && liveEdge <= 0)
       ? "below_baseline"
-      : "building";
+      : !liveKnown || liveEnough
+        ? "unconfirmed"
+        : "building";
   const stateCopy = overallState === "validated"
     ? {
       title: zh ? "当前模型已通过基础验证门槛" : "Current model passes the base validation gates",
@@ -72,6 +79,11 @@ export function ForecastTrackRecord() {
         title: zh ? "当前模型尚未证明优于简单基准" : "Current model has not yet beaten the simple baseline",
         body: zh ? "所有推荐保持“研究候选”状态，不形成买卖结论。模型会继续积累冻结样本并接受自动回滚治理。" : "All picks remain research candidates rather than trade conclusions while frozen evidence accumulates under rollback governance.",
       }
+      : overallState === "unconfirmed"
+        ? {
+          title: zh ? "实盘成绩暂不可判定" : "Live results cannot be assessed yet",
+          body: zh ? "实盘统计缺少时间资格口径或关键指标（可能来自旧版缓存），刷新后再查看；确认之前不作为验证依据。" : "Live statistics lack the timing protocol or a key metric (possibly an old cached response). Refresh to retry; they are not used as validation evidence until confirmed.",
+        }
       : {
         title: zh ? `实盘合格样本积累中（${Math.min(liveSamples, QUALIFIED_SAMPLE_GOAL)}/${QUALIFIED_SAMPLE_GOAL}）` : `Qualified live samples accumulating (${Math.min(liveSamples, QUALIFIED_SAMPLE_GOAL)}/${QUALIFIED_SAMPLE_GOAL})`,
         body: zh ? "样本不足时只展示数值研究结果，不将历史同向占比解释为未来真实概率；在此期间模型使用保守组合。" : "Until enough qualified samples exist, numeric research outputs are shown without presenting historical direction share as a future probability, and the model runs its conservative ensemble.",
@@ -87,7 +99,7 @@ export function ForecastTrackRecord() {
   const horizons = ["1D", "5D", "10D", "1M"].map((horizon) => ({
     horizon,
     backtest: horizonStat(data.backtest.horizon_statistics, horizon),
-    live: horizonStat(data.live.horizon_statistics, horizon),
+    live: horizonStat(qualifiedStats(data.live.horizon_statistics), horizon),
   }));
   return <main className="page-shell score-page">
     <header className="page-title"><div><h1>{zh ? "预测成绩与模型治理" : "Forecast record and model governance"}</h1><p>{zh ? "回测与真实冻结预测分开披露；模型漂移时自动暂停晋级并回退。" : "Backtests and frozen live calls are reported separately; drift automatically blocks promotion and triggers rollback."}</p></div><div className="score-page-actions"><button className="icon-button labeled" onClick={load}><RefreshCw size={14} />{zh ? "刷新" : "Refresh"}</button><button className="icon-button labeled" disabled={!filteredRecords.length} onClick={() => downloadForecastCsv(filteredRecords, horizon, zh)}><Download size={14} />CSV</button></div></header>
@@ -102,7 +114,7 @@ export function ForecastTrackRecord() {
     <section className="score-summary">
       <article><small>{zh ? "走步回测样本" : "Walk-forward samples"}</small><strong>{backtest?.completed ?? 0}</strong><span>{zh ? "时间顺序验证" : "Chronological validation"}</span></article>
       <article><small>{zh ? "回测方向优势" : "Backtest edge"}</small><strong className={edgeClass(backtest?.direction_edge)}>{formatMetricPercent(backtest?.direction_edge, true)}</strong><span>{zh ? `准确率 ${formatMetricPercent(backtest?.direction_accuracy)}` : `Accuracy ${formatMetricPercent(backtest?.direction_accuracy)}`}</span></article>
-      <article><small>{zh ? "合格实盘样本" : "Qualified live samples"}</small><strong>{liveSamples}</strong><span>{liveCounts.excluded ? (zh ? `另有 ${liveCounts.excluded} 条已有结果但不计入` : `${liveCounts.excluded} more have outcomes but do not count`) : (zh ? "发布后不可回写" : "Immutable after publication")}</span></article>
+      <article><small>{zh ? "合格实盘样本" : "Qualified live samples"}</small><strong>{liveKnown ? liveSamples : "—"}</strong><span>{!liveKnown ? (zh ? "统计口径未确认" : "Scoring protocol unconfirmed") : liveCounts.excluded ? (zh ? `另有 ${liveCounts.excluded} 条已有结果但不计入` : `${liveCounts.excluded} more have outcomes but do not count`) : (zh ? "发布后不可回写" : "Immutable after publication")}</span></article>
       <article><small>{zh ? "实盘方向优势" : "Live direction edge"}</small><strong className={edgeClass(live?.direction_edge)}>{formatMetricPercent(live?.direction_edge, true)}</strong><span>{zh ? `多数类基准 ${formatMetricPercent(live?.majority_baseline_accuracy)}` : `Majority baseline ${formatMetricPercent(live?.majority_baseline_accuracy)}`}</span></article>
     </section>
     <section className="score-trend" aria-label={zh ? "近期模型趋势" : "Recent model trend"}>
@@ -132,7 +144,7 @@ export function ForecastTrackRecord() {
           <td data-label={zh ? "回测准确率" : "Backtest accuracy"}>{formatMetricPercent(horizonBacktest?.direction_accuracy)}</td>
           <td data-label={zh ? "回测基准" : "Backtest baseline"}>{formatMetricPercent(horizonBacktest?.majority_baseline_accuracy)}</td>
           <td data-label={zh ? "回测优势" : "Backtest edge"} className={edgeClass(horizonBacktest?.direction_edge)}>{formatMetricPercent(horizonBacktest?.direction_edge, true)}</td>
-          <td data-label={zh ? "合格样本" : "Qualified samples"}>{liveCount}</td>
+          <td data-label={zh ? "合格样本" : "Qualified samples"}>{horizonLive ? liveCount : "—"}</td>
           <td data-label={zh ? "实盘准确率" : "Live accuracy"}>{formatMetricPercent(horizonLive?.direction_accuracy)}</td>
           <td data-label={zh ? "实盘优势" : "Live edge"} className={edgeClass(horizonLive?.direction_edge)}>{formatMetricPercent(horizonLive?.direction_edge, true)}</td>
           <td data-label={zh ? "结论" : "Conclusion"}><span className={`forecast-passport-status ${state}`}>{label}</span></td>
@@ -148,7 +160,7 @@ export function ForecastTrackRecord() {
         return <tr key={label}>
           <td data-label={zh ? "周期" : "Horizon"}><strong>{label}</strong></td>
           <td data-label={zh ? "已有结果" : "With outcome"}>{shown(counts.observed)}</td>
-          <td data-label={zh ? "已计入" : "Counted"}>{horizonLive?.completed ?? 0}</td>
+          <td data-label={zh ? "已计入" : "Counted"}>{horizonLive ? horizonLive.completed : "—"}</td>
           <td data-label={zh ? "有结果但不计入" : "Outcome, not counted"}>{shown(counts.excluded)}</td>
           <td data-label={zh ? "时间合格" : "Timing eligible"}>{shown(counts.eligible)}</td>
           <td data-label={zh ? "时间不合格" : "Timing ineligible"}>{shown(counts.ineligible)}</td>
@@ -174,9 +186,9 @@ export function ForecastTrackRecord() {
     <section className="score-methods"><article><ShieldCheck size={18} /><div><strong>{zh ? "自动结算与回滚" : "Automatic settlement and rollback"}</strong><p>{zh ? "每日只结算通过时间资格的冻结预测，用目标交易日的不复权收盘价计算 1日、5日、10日和1个月结果，结算后不可改写。合格样本不足 20 个时使用保守组合；近 20 个合格样本失去优势时进入观察或安全回退。" : "Only time-qualified frozen forecasts are settled, using unadjusted target-session closes for 1D, 5D, 10D and 1M, and settled results are immutable. Below 20 qualified samples the conservative ensemble runs; loss of edge over the latest 20 qualified samples triggers watch or safe rollback."}</p></div></article><article><BrainCircuit size={18} /><div><strong>{zh ? "官方 Kronos 批量模型" : "Official Kronos batch model"}</strong><p>{zh ? "使用 NeoQuasar 官方 Kronos-mini 离线推理；只有批次日期与最新行情一致时才以有限权重加入组合。" : "Official NeoQuasar Kronos-mini runs offline and enters the ensemble at a capped weight only when its batch date matches current market data."}</p></div></article></section>
     <section className="score-assets"><header><h2>{zh ? "核心资产明细" : "Core asset detail"}</h2><small>{data.data_as_of}</small></header><div>{data.per_asset.map((asset) => {
       const assetBacktest = all(asset.backtest.statistics);
-      const assetLive = all(asset.live.statistics);
+      const assetLive = all(qualifiedStats(asset.live.statistics));
       const governance = asset.governance;
-      return <article key={asset.symbol}><header><strong>{asset.symbol}</strong><span className={`governance-status ${governance?.status || "warming_up"}`}>{statusLabel(governance?.status || "warming_up", zh)}</span></header><dl><div><dt>{zh ? "回测优势" : "Backtest edge"}</dt><dd>{formatMetricPercent(assetBacktest?.direction_edge, true)}</dd></div><div><dt>{zh ? "合格样本" : "Qualified samples"}</dt><dd>{assetLive?.completed ?? 0}</dd></div><div><dt>{zh ? "实盘优势" : "Live edge"}</dt><dd>{formatMetricPercent(assetLive?.direction_edge, true)}</dd></div><div><dt>Kronos</dt><dd>{asset.kronos?.data_as_of || (zh ? "等待批次" : "Awaiting batch")}</dd></div></dl><p>{governance ? (zh ? governance.reason_zh : governance.reason_en) : (zh ? "模型治理样本正在建立。" : "Model-governance evidence is accumulating.")}</p></article>;
+      return <article key={asset.symbol}><header><strong>{asset.symbol}</strong><span className={`governance-status ${governance?.status || "warming_up"}`}>{statusLabel(governance?.status || "warming_up", zh)}</span></header><dl><div><dt>{zh ? "回测优势" : "Backtest edge"}</dt><dd>{formatMetricPercent(assetBacktest?.direction_edge, true)}</dd></div><div><dt>{zh ? "合格样本" : "Qualified samples"}</dt><dd>{assetLive ? assetLive.completed : "—"}</dd></div><div><dt>{zh ? "实盘优势" : "Live edge"}</dt><dd>{formatMetricPercent(assetLive?.direction_edge, true)}</dd></div><div><dt>Kronos</dt><dd>{asset.kronos?.data_as_of || (zh ? "等待批次" : "Awaiting batch")}</dd></div></dl><p>{governance ? (zh ? governance.reason_zh : governance.reason_en) : (zh ? "模型治理样本正在建立。" : "Model-governance evidence is accumulating.")}</p></article>;
     })}</div></section>
     <p className="score-note">{zh ? "方向优势 = 模型方向准确率 - 同期多数类基准准确率。历史结果不代表未来表现。" : "Direction edge equals model directional accuracy minus the contemporaneous majority-class baseline. Historical results do not guarantee future performance."}</p>
   </main>;

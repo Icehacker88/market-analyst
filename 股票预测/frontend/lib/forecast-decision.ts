@@ -1,3 +1,4 @@
+import { forecastLiveEvidence } from "./forecast-eligibility-view";
 import type { Forecast } from "./types";
 
 export type ForecastDecision = {
@@ -17,8 +18,9 @@ export function forecastDecision(forecast: Forecast, evidenceScore: number, lang
   const zh = language === "zh";
   const action = forecast.action;
   const backtestEdge = finite(forecast.validation?.backtest.direction_edge);
-  const liveEdge = finite(forecast.validation?.live.direction_edge);
-  const liveSamples = forecast.validation?.live.samples ?? 0;
+  const liveEvidence = forecastLiveEvidence(forecast);
+  const liveEdge = finite(liveEvidence?.direction_edge);
+  const liveSamples = liveEvidence?.samples ?? 0;
   const evidenceReady = evidenceScore >= 55
     && (backtestEdge === null || backtestEdge > 0)
     && (liveSamples < 20 || liveEdge === null || liveEdge > 0);

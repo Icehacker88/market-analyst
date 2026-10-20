@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { getForecastScoreboard, getHomeData, subscribeHomeResponse, type HomeResponsePath } from "@/lib/api";
+import { getForecastScoreboard, getHomeData, SCOREBOARD_PATH, subscribeHomeResponse, type HomeResponsePath } from "@/lib/api";
 import type { ForecastScoreboard, HomeData } from "@/lib/types";
 
 type Resource<T> = { data: T | null; status: "loading" | "ready" | "stale" | "error"; refreshing: boolean; failed: boolean };
-const loaders = { "/api/home": getHomeData, "/api/forecast/scoreboard?v=2": getForecastScoreboard };
+const loaders = { "/api/home": getHomeData, [SCOREBOARD_PATH]: getForecastScoreboard };
 export function useHomeResource<T extends HomeData | ForecastScoreboard>(path: HomeResponsePath, delay = 0) {
   const [state, setState] = useState<Resource<T>>({ data: null, status: "loading", refreshing: false, failed: false });
   const refresh = useCallback(() => { void loaders[path](true).catch(() => undefined); }, [path]);
