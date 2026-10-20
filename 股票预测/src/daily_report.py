@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from src.data_loader import download_yahoo_chart
+from src.forecast_eligibility import make_snapshot, qualify
+from src.preprocessing import clean_price_data
 from src.emailer import send_report_email
 from src.email_report import write_html_daily_report
 from src.forecast_text import forecast_sentence
@@ -36,14 +38,26 @@ def run_daily_report(
 
     snapshots: list[MarketSnapshot] = []
     market_frames: dict[str, pd.DataFrame] = {}
+    market_provenance: dict[str, dict[str, str]] = {}
     model_rows = []
     for ticker in MARKET_ASSETS:
         raw = download_yahoo_chart(ticker=ticker, start=market_start, end=end)
         market_frames[ticker] = raw
+        market_provenance[ticker] = {"source": "yahoo", "observed_at": raw.attrs.get("source_observed_at", "")}
         snapshot, technical = analyze_market_frame(ticker, raw)
         snapshots.append(snapshot)
         technical.to_csv(report_dir / f"technical_{_safe_name(ticker)}.csv", index=False)
         try:
+            # Do not spend model CPU on a known stale/unclosed US-equity base.
+            # Unsupported calendars remain explicitly unknown; no global market assumptions.
+            cleaned, quality = clean_price_data(raw)
+            checked_at = datetime.now(ZoneInfo("UTC")).isoformat()
+            as_of = str(quality.end_date)
+            readiness = qualify({"Ticker": ticker, "As_Of_Date": as_of, "Created_At": checked_at,
+                "Evaluation_Snapshot": make_snapshot(ticker, as_of, float(cleaned["Price"].iloc[-1]), quality.price_column,
+                    "yahoo", market_provenance[ticker]["observed_at"], checked_at, checked_at)})
+            if readiness["status"] == "ineligible":
+                raise ValueError("Prediction time not eligible: " + readiness["reason"])
             model_dir = _run_frame(
                 raw=raw,
                 ticker=ticker,
@@ -53,7 +67,9 @@ def run_daily_report(
                 forecast_days=forecast_days,
                 include_arima=include_arima,
             )
-            model_rows.append(_read_model_summary(ticker, model_dir))
+            summary = _read_model_summary(ticker, model_dir)
+            summary["Forecast_Generated_At"] = datetime.now(ZoneInfo("UTC")).isoformat()
+            model_rows.append(summary)
         except Exception as exc:
             model_rows.append(
                 {
@@ -99,6 +115,7 @@ def run_daily_report(
         prediction_frame=prediction_frame,
         market_frames=market_frames,
         generated_at=beijing_now,
+        market_provenance=market_provenance,
     )
     ledger_snapshot_path = report_dir / "prediction_ledger_snapshot.csv"
     ledger_metrics_path = report_dir / "prediction_ledger_metrics.csv"
@@ -395,7 +412,7 @@ def _ledger_summary(metrics: pd.DataFrame) -> str:
 
 def _validation_summary(validation: pd.DataFrame) -> str:
     if validation.empty:
-        return "暂无可验证的上一交易日预测；将在获得下一交易日实际收盘数据后自动补齐。"
+        return "暂无同时具备时间资格、冻结价格快照和已确认结果的预测；历史信息不足的记录不会自动补造。"
     lines = []
     for _, row in validation.iterrows():
         lines.append(

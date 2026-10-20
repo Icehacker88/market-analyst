@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from src.prediction_ledger import build_latest_1d_validation, update_prediction_
 
 class PredictionLedgerTests(unittest.TestCase):
     def test_ledger_freezes_prediction_and_reconciles_actuals(self) -> None:
-        dates = pd.date_range("2026-01-01", periods=8, freq="B")
+        dates = pd.date_range("2026-01-02", periods=8, freq="B")
         prices = [100, 101, 102, 104, 103, 106, 108, 109]
         full_market = pd.DataFrame(
             {
@@ -26,6 +27,7 @@ class PredictionLedgerTests(unittest.TestCase):
             [
                 {
                     "Ticker": "SPY",
+                    "Forecast_Generated_At": "2026-01-05T22:00:00+00:00",
                     "Best_Model": "ARIMA",
                     "Forecast_1D_Direction": "Up",
                     "Forecast_1D_Signal": "Up",
@@ -41,17 +43,19 @@ class PredictionLedgerTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             ledger_path = Path(directory) / "ledger.csv"
-            update_prediction_ledger(
-                ledger_path,
-                prediction,
-                {"SPY": full_market.iloc[:2]},
-                datetime.now(timezone.utc),
-            )
+            with patch("src.prediction_ledger.datetime") as clock:
+                clock.now.return_value = datetime(2026, 1, 5, 22, 0, 1, tzinfo=timezone.utc)
+                update_prediction_ledger(
+                    ledger_path, prediction, {"SPY": full_market.iloc[:2]},
+                    datetime(2026, 1, 5, 22, tzinfo=timezone.utc),
+                    {"SPY": {"source": "yahoo", "observed_at": "2026-01-05T21:15:00+00:00"}},
+                )
             ledger, metrics = update_prediction_ledger(
                 ledger_path,
                 pd.DataFrame(columns=["Ticker"]),
                 {"SPY": full_market},
                 datetime.now(timezone.utc),
+                {"SPY": {"source": "yahoo", "observed_at": "2026-01-14T22:00:00+00:00"}},
             )
 
         self.assertEqual(len(ledger), 1)

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+import json
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from src.preprocessing import clean_price_data
+from src.forecast_eligibility import make_snapshot, qualify, outcome_eligible, session, HORIZONS, VERSION, timestamp
 
 
 LEDGER_COLUMNS = [
+    "Evaluation_Snapshot_JSON",
+    "Outcome_Evidence_JSON",
     "Created_At",
     "As_Of_Date",
     "Ticker",
@@ -33,6 +38,8 @@ LEDGER_COLUMNS = [
     "Risk_5D_Correct",
 ]
 TEXT_COLUMNS = [
+    "Evaluation_Snapshot_JSON",
+    "Outcome_Evidence_JSON",
     "Created_At",
     "As_Of_Date",
     "Ticker",
@@ -68,20 +75,28 @@ def update_prediction_ledger(
     prediction_frame: pd.DataFrame,
     market_frames: dict[str, pd.DataFrame],
     generated_at: datetime,
+    market_provenance: dict[str, dict[str, str]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     ledger = _load_ledger(ledger_path)
-    ledger = _reconcile_actuals(ledger, market_frames)
+    ledger = _reconcile_actuals(ledger, market_frames, market_provenance or {})
     existing_keys = set(zip(ledger["Ticker"], ledger["As_Of_Date"]))
     new_rows = []
     for _, prediction in prediction_frame.iterrows():
         ticker = str(prediction.get("Ticker", ""))
-        if prediction.get("Error") or ticker not in market_frames:
+        if (pd.notna(prediction.get("Error")) and prediction.get("Error")) or ticker not in market_frames:
             continue
-        cleaned, _ = clean_price_data(market_frames[ticker])
+        cleaned, quality = clean_price_data(market_frames[ticker])
         as_of_date = pd.to_datetime(cleaned["Date"].iloc[-1]).date().isoformat()
         if (ticker, as_of_date) in existing_keys:
             continue
-        new_rows.append(_new_ledger_row(prediction, generated_at, as_of_date))
+        row = _new_ledger_row(prediction, generated_at, as_of_date)
+        provenance = (market_provenance or {}).get(ticker, {})
+        snapshot = make_snapshot(ticker, as_of_date, float(cleaned["Price"].iloc[-1]), quality.price_column,
+                                 provenance.get("source", ""), provenance.get("observed_at", ""),
+                                 str(prediction.get("Forecast_Generated_At", "")), "")
+        row["Evaluation_Snapshot_JSON"] = json.dumps(snapshot, sort_keys=True)
+        new_rows.append(row)
+        existing_keys.add((ticker, as_of_date))
     if new_rows:
         new_frame = pd.DataFrame(new_rows).reindex(columns=LEDGER_COLUMNS)
         ledger = (
@@ -89,11 +104,21 @@ def update_prediction_ledger(
             if ledger.empty
             else pd.concat([ledger, new_frame], ignore_index=True)
         )
-    ledger = ledger.reindex(columns=LEDGER_COLUMNS).sort_values(
+    ledger = ledger.reindex(columns=list(dict.fromkeys([*LEDGER_COLUMNS, *ledger.columns]))).sort_values(
         ["As_Of_Date", "Ticker"]
     )
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    ledger.to_csv(ledger_path, index=False)
+    # Publish complete immutable input first; missing acknowledgement on a crash stays unknown.
+    _atomic_write(ledger, ledger_path)
+    frozen_at = datetime.now(timezone.utc).isoformat()
+    new_keys = {(r["Ticker"], r["As_Of_Date"]) for r in new_rows}
+    for index, row in ledger.iterrows():
+        if (row["Ticker"], row["As_Of_Date"]) in new_keys:
+            snapshot = json.loads(row["Evaluation_Snapshot_JSON"])
+            snapshot["frozen_at"] = frozen_at
+            ledger.at[index, "Evaluation_Snapshot_JSON"] = json.dumps(snapshot, sort_keys=True)
+    if new_rows:
+        _atomic_write(ledger, ledger_path)
     return ledger.reset_index(drop=True), build_ledger_metrics(ledger)
 
 
@@ -106,12 +131,21 @@ def build_ledger_metrics(ledger: pd.DataFrame) -> pd.DataFrame:
         ordered = scope.sort_values("As_Of_Date")
         for window in [20, 60, 120, None]:
             sample = ordered if window is None else ordered.tail(window)
-            direction = sample.dropna(subset=["Raw_Direction_Correct"])
-            actionable = sample.dropna(subset=["Action_Signal_Correct"])
-            risk = sample.dropna(subset=["Risk_5D_Correct"])
+            eligible_1d = sample.apply(lambda r: outcome_eligible(_evaluation_row(r), "1D"), axis=1).astype(bool)
+            eligible_5d = sample.apply(lambda r: outcome_eligible(_evaluation_row(r), "5D"), axis=1).astype(bool)
+            direction = sample.loc[eligible_1d].dropna(subset=["Raw_Direction_Correct"])
+            actionable = sample.loc[eligible_1d].dropna(subset=["Action_Signal_Correct"])
+            risk = sample.loc[eligible_5d].dropna(subset=["Risk_5D_Correct"])
+            states = [qualify(_evaluation_row(r))["status"] for _, r in sample.iterrows()]
             return_errors = _return_errors(direction)
             rows.append(
                 {
+                    "Evaluation_Protocol": VERSION,
+                    "Observed_1D": int(sample["Actual_1D_Return"].notna().sum()),
+                    "Eligible_1D": states.count("eligible"),
+                    "Ineligible_1D": states.count("ineligible"),
+                    "Unknown_1D": states.count("unknown"),
+                    "Excluded_1D": int(sample["Actual_1D_Return"].notna().sum()) - len(direction),
                     "Ticker": ticker,
                     "Window": "All" if window is None else str(window),
                     "Completed_1D": len(direction),
@@ -143,7 +177,8 @@ def build_ledger_metrics(ledger: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_latest_1d_validation(ledger: pd.DataFrame) -> pd.DataFrame:
-    completed = ledger.dropna(
+    qualified = ledger.loc[ledger.apply(lambda r: outcome_eligible(_evaluation_row(r), "1D"), axis=1).astype(bool)]
+    completed = qualified.dropna(
         subset=["Actual_1D_Date", "Actual_1D_Return", "Forecast_1D_Return"]
     ).copy()
     if completed.empty:
@@ -188,60 +223,91 @@ def _load_ledger(path: Path) -> pd.DataFrame:
             ledger[column] = pd.NA
     for column in TEXT_COLUMNS:
         ledger[column] = ledger[column].astype("object")
-    return ledger.reindex(columns=LEDGER_COLUMNS)
+    return ledger.reindex(columns=list(dict.fromkeys([*LEDGER_COLUMNS, *ledger.columns])))
+
+
+def _evaluation_row(row: pd.Series) -> dict:
+    result = row.to_dict()
+    for key in ["Evaluation_Snapshot", "Outcome_Evidence"]:
+        try:
+            parsed = json.loads(str(row.get(key + "_JSON", "")))
+            result[key] = parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            result[key] = {}
+    return result
+
+
+def _atomic_write(frame: pd.DataFrame, path: Path) -> None:
+    # The scheduled workflow is serialized; replace prevents a partially written CSV.
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        frame.to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _reconcile_actuals(
     ledger: pd.DataFrame,
     market_frames: dict[str, pd.DataFrame],
+    provenance: dict[str, dict[str, str]] | None = None,
 ) -> pd.DataFrame:
     result = ledger.copy()
+    now = datetime.now(timezone.utc)
     for ticker, raw in market_frames.items():
-        cleaned, _ = clean_price_data(raw)
-        cleaned["Date"] = pd.to_datetime(cleaned["Date"])
-        ticker_rows = result.index[result["Ticker"] == ticker]
-        for index in ticker_rows:
-            as_of = pd.to_datetime(result.at[index, "As_Of_Date"])
-            history = cleaned[cleaned["Date"] <= as_of]
-            future = cleaned[cleaned["Date"] > as_of]
-            if history.empty:
-                continue
-            current_price = float(history["Price"].iloc[-1])
-            if pd.isna(result.at[index, "Actual_1D_Return"]) and len(future) >= 1:
-                next_row = future.iloc[0]
-                actual_return = float(np.log(float(next_row["Price"]) / current_price))
-                actual_direction = "Up" if actual_return >= 0 else "Down"
-                result.at[index, "Actual_1D_Date"] = next_row["Date"].date().isoformat()
-                result.at[index, "Actual_1D_Return"] = actual_return
-                result.at[index, "Actual_1D_Direction"] = actual_direction
-                result.at[index, "Raw_Direction_Correct"] = int(
-                    result.at[index, "Raw_Direction"] == actual_direction
-                )
-                signal = result.at[index, "Action_Signal"]
-                if signal in {"Up", "Down"}:
-                    result.at[index, "Action_Signal_Correct"] = int(
-                        signal == actual_direction
-                    )
-            if pd.isna(result.at[index, "Actual_5D_Realized_Vol"]) and len(future) >= 5:
-                first_five = future.iloc[:5]
-                prices = np.array([current_price, *first_five["Price"].astype(float)])
-                realized_vol = float(np.sqrt(np.mean(np.diff(np.log(prices)) ** 2)))
-                threshold = _to_float(
-                    result.at[index, "Risk_5D_Threshold_Daily_Vol"]
-                )
-                if threshold is None:
+        cleaned, quality = clean_price_data(raw)
+        cleaned["Date"] = pd.to_datetime(cleaned["Date"]).dt.date.astype(str)
+        by_date = cleaned.set_index("Date")
+        origin = (provenance or {}).get(ticker, {})
+        observed = timestamp(origin.get("observed_at"))
+        for index in result.index[result["Ticker"] == ticker]:
+            row = _evaluation_row(result.loc[index])
+            if qualify(row, now=now)["status"] != "eligible":
+                continue  # Never settle/backfill legacy or disqualified records.
+            snapshot = row["Evaluation_Snapshot"]
+            base = snapshot["base_session"]
+            if (base not in by_date.index or quality.price_column != snapshot["price_basis"]
+                    or origin.get("source") != snapshot["source"] or observed is None or observed > now
+                    or not np.isclose(float(by_date.loc[base, "Price"]), snapshot["base_price"], rtol=1e-10, atol=1e-8)):
+                continue  # Revised/mixed-basis series cannot silently change the frozen denominator.
+            evidence = dict(row["Outcome_Evidence"])
+            for horizon in ["1D", "5D"]:
+                actual_column = "Actual_1D_Return" if horizon == "1D" else "Actual_5D_Realized_Vol"
+                if pd.notna(row.get(actual_column)) or qualify(row, horizon, now)["status"] != "eligible":
                     continue
-                actual_high_risk = int(realized_vol > threshold)
-                probability = _to_float(result.at[index, "Risk_5D_Probability"])
-                result.at[index, "Actual_5D_Date"] = (
-                    first_five.iloc[-1]["Date"].date().isoformat()
-                )
-                result.at[index, "Actual_5D_Realized_Vol"] = realized_vol
-                result.at[index, "Actual_5D_High_Risk"] = actual_high_risk
-                if probability is not None:
-                    result.at[index, "Risk_5D_Correct"] = int(
-                        (probability >= 0.5) == bool(actual_high_risk)
-                    )
+                dates = snapshot["target_sessions"][:HORIZONS[horizon]]
+                target = dates[-1]
+                if any(d not in by_date.index for d in dates) or observed < session(target)[1] + timedelta(minutes=15):
+                    continue
+                prices = np.array([snapshot["base_price"], *[float(by_date.loc[d, "Price"]) for d in dates]])
+                if not np.isfinite(prices).all() or (prices <= 0).any():
+                    continue
+                if horizon == "1D":
+                    actual = float(np.log(prices[-1] / prices[0]))
+                    direction = "Up" if actual >= 0 else "Down"
+                    result.at[index, "Actual_1D_Date"] = target
+                    result.at[index, "Actual_1D_Return"] = actual
+                    result.at[index, "Actual_1D_Direction"] = direction
+                    result.at[index, "Raw_Direction_Correct"] = int(row["Raw_Direction"] == direction)
+                    if row["Action_Signal"] in {"Up", "Down"}:
+                        result.at[index, "Action_Signal_Correct"] = int(row["Action_Signal"] == direction)
+                else:
+                    threshold, probability = _to_float(row.get("Risk_5D_Threshold_Daily_Vol")), _to_float(row.get("Risk_5D_Probability"))
+                    if threshold is None:
+                        continue
+                    realized = float(np.sqrt(np.mean(np.diff(np.log(prices)) ** 2)))
+                    high = int(realized > threshold)
+                    result.at[index, "Actual_5D_Date"] = target
+                    result.at[index, "Actual_5D_Realized_Vol"] = realized
+                    result.at[index, "Actual_5D_High_Risk"] = high
+                    if probability is not None:
+                        result.at[index, "Risk_5D_Correct"] = int((probability >= .5) == bool(high))
+                evidence[horizon] = dict(source=snapshot["source"], price_basis=snapshot["price_basis"],
+                    base_price=snapshot["base_price"], actual_price=float(prices[-1]), target_session=target,
+                    source_observed_at=origin["observed_at"], settled_at=now.isoformat())
+            if evidence != row["Outcome_Evidence"]:
+                result.at[index, "Outcome_Evidence_JSON"] = json.dumps(evidence, sort_keys=True)
     return result
 
 
@@ -251,7 +317,7 @@ def _new_ledger_row(
     as_of_date: str,
 ) -> dict[str, object]:
     return {
-        "Created_At": generated_at.isoformat(),
+        "Created_At": prediction.get("Forecast_Generated_At", generated_at.isoformat()),
         "As_Of_Date": as_of_date,
         "Ticker": prediction.get("Ticker"),
         "Best_Model": prediction.get("Best_Model"),

@@ -1,0 +1,134 @@
+[
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-10-09",
+    "Created_At": "2026-10-09T17:01:44.708Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-10-07",
+    "Created_At": "2026-10-07T18:06:04.044Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-09-29",
+    "Created_At": "2026-09-29T18:04:30.303Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-09-01",
+    "Created_At": "2026-09-01T15:44:33.598Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-08-13",
+    "Created_At": "2026-08-13T16:32:33.331Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-08-10",
+    "Created_At": "2026-08-10T15:27:03.405Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-07-24",
+    "Created_At": "2026-07-24T15:18:32.538Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-07-23",
+    "Created_At": "2026-07-23T14:31:11.599Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "NVDA",
+    "As_Of_Date": "2026-07-15",
+    "Created_At": "2026-07-15T15:18:32.802Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-08-13",
+    "Created_At": "2026-08-13T16:50:43.355Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-07-24",
+    "Created_At": "2026-07-24T15:41:34.134Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-07-23",
+    "Created_At": "2026-07-23T16:40:36.535Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-07-15",
+    "Created_At": "2026-07-15T16:35:00.303Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-08-13",
+    "Created_At": "2026-08-13T16:50:41.784Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-07-24",
+    "Created_At": "2026-07-24T15:41:32.174Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-07-23",
+    "Created_At": "2026-07-23T16:40:36.378Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-07-15",
+    "Created_At": "2026-07-15T16:35:00.550Z",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "QQQ",
+    "As_Of_Date": "2026-08-28",
+    "Created_At": "2026-08-29T00:41:01.402575+08:00",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "SPY",
+    "As_Of_Date": "2026-08-28",
+    "Created_At": "2026-08-29T00:41:01.402575+08:00",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "^NDX",
+    "As_Of_Date": "2026-08-28",
+    "Created_At": "2026-08-29T00:41:01.402575+08:00",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "^VIX",
+    "As_Of_Date": "2026-08-28",
+    "Created_At": "2026-08-29T00:41:01.402575+08:00",
+    "classification": "base_before_16et_pending"
+  },
+  {
+    "Ticker": "^VIX",
+    "As_Of_Date": "2026-09-04",
+    "Created_At": "2026-09-05T08:57:00.368135+08:00",
+    "classification": "timing_only_not_disqualified"
+  }
+]

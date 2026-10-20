@@ -51,6 +51,7 @@ def download_yahoo_chart(
     try:
         response = requests.get(url, params=params, headers=headers, timeout=30)
         response.raise_for_status()
+        source_observed_at = datetime.now(timezone.utc).isoformat()
         payload = response.json()
     except Exception as exc:
         raise DataLoadError(f"在线下载 {ticker} 数据失败：{exc}") from exc
@@ -84,6 +85,7 @@ def download_yahoo_chart(
             "Volume": quote_data.get("volume"),
         }
     )
+    frame.attrs["source_observed_at"] = source_observed_at
     return frame
 
 
