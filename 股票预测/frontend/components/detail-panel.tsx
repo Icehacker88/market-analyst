@@ -8,7 +8,7 @@ import { compactChatThread, conversationForApi, createChatMessage, dedupeChatMes
 import { displayAssetName } from "@/lib/assets";
 import { trackEvent } from "@/lib/analytics";
 import { directionalLevels, forecastBrief, type DirectionalLevels } from "@/lib/forecast-brief";
-import { forecastLiveEvidence, isCounted, qualifiedStats, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
+import { forecastLiveEvidence, isCounted, onePerBaseDate, qualifiedStats, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
 import { forecastCredibility, predictionScore } from "@/lib/forecast-credibility";
 import { forecastDecision } from "@/lib/forecast-decision";
 import { forecastPassport, type ForecastPassportState } from "@/lib/forecast-passport";
@@ -466,20 +466,25 @@ function ForecastContextPanel({ forecast }: { forecast: Forecast }) {
   </section>;
 }
 
-function ForecastEvolution({ forecast, predictions, loading }: { forecast: Forecast; predictions?: PredictionHistory; loading?: boolean }) {
+export function ForecastEvolution({ forecast, predictions, loading }: { forecast: Forecast; predictions?: PredictionHistory; loading?: boolean }) {
   const { language } = useApp();
   const zh = language === "zh";
-  const records = (predictions?.live?.records || predictions?.records || []).slice(0, 8);
+  const entries = onePerBaseDate(predictions?.live?.records || predictions?.records || []).slice(0, 8);
   if (loading && !predictions) return <section className="forecast-evolution"><header><strong>{zh ? "预测变化记录" : "Forecast change log"}</strong><small>{zh ? "正在读取冻结预测…" : "Loading frozen forecasts…"}</small></header></section>;
-  const latest = records[0];
-  const previous = records[1];
+  const latest = entries[0]?.row;
+  const previous = entries[1]?.row;
   const latestReturn = ledgerNumber(latest, "Forecast_1D_Return", forecast.forecast_1d_return);
   const previousReturn = ledgerNumber(previous, "Forecast_1D_Return", null);
   const delta = previousReturn === null || latestReturn === null ? null : latestReturn - previousReturn;
   return <section className="forecast-evolution">
     <header><span><strong>{zh ? "预测变化记录" : "Forecast change log"}</strong><small>{zh ? "仅使用当日冻结、事后不可回写的预测" : "Only immutable forecasts frozen on their publication date"}</small></span>{delta === null ? null : <b className={delta >= 0 ? "positive" : "negative"}>{zh ? "较上次" : "vs prior"} {formatPercent(delta, true)}</b>}</header>
-    {records.length ? <div className="table-wrap"><table><thead><tr><th>{zh ? "日期" : "Date"}</th><th>{zh ? "模型" : "Model"}</th><th>1D</th><th>5D</th><th>10D</th><th>1M</th><th>{zh ? "实际1D" : "Actual 1D"}</th></tr></thead><tbody>{records.map((row, index) => <tr key={`${String(row.As_Of_Date)}-${index}`}><td>{String(row.As_Of_Date || "—")}</td><td>{localizeModel(String(row.Best_Model || forecast.best_model), language)}</td><td>{formatPercent(row.Forecast_1D_Return, true)}</td><td>{formatPercent(row.Forecast_5D_Return, true)}</td><td>{formatPercent(row.Forecast_10D_Return, true)}</td><td>{formatPercent(row.Forecast_1M_Return, true)}</td><td>{formatPercent(row.Actual_1D_Return, true)}</td></tr>)}</tbody></table></div> : <p>{zh ? "当前预测已生成；从下一次每日冻结预测开始，这里会保留方向、幅度和模型变化。" : "The current forecast is available. Direction, magnitude and model changes will appear after the next daily frozen call."}</p>}
+    {entries.length ? <div className="table-wrap"><table><thead><tr><th>{zh ? "日期" : "Date"}</th><th>{zh ? "模型" : "Model"}</th><th>1D</th><th>5D</th><th>10D</th><th>1M</th><th>{zh ? "实际1D" : "Actual 1D"}</th></tr></thead><tbody>{entries.map(({ row, others }, index) => <tr key={`${String(row.As_Of_Date)}-${index}`}><td>{String(row.As_Of_Date || "—")}{others.length ? <small className="record-state-reason">{sameDayNote(others, zh)}</small> : null}</td><td>{localizeModel(String(row.Best_Model || forecast.best_model), language)}</td><td>{formatPercent(row.Forecast_1D_Return, true)}</td><td>{formatPercent(row.Forecast_5D_Return, true)}</td><td>{formatPercent(row.Forecast_10D_Return, true)}</td><td>{formatPercent(row.Forecast_1M_Return, true)}</td><td>{formatPercent(row.Actual_1D_Return, true)}</td></tr>)}</tbody></table></div> : <p>{zh ? "当前预测已生成；从下一次每日冻结预测开始，这里会保留方向、幅度和模型变化。" : "The current forecast is available. Direction, magnitude and model changes will appear after the next daily frozen call."}</p>}
   </section>;
+}
+
+function sameDayNote(others: LedgerRecord[], zh: boolean): string {
+  const reason = reasonLabel(stateReasonCode(others[0], "1D"), zh) || stateLabel(recordState(others[0], "1D"), zh);
+  return zh ? `同日另有 ${others.length} 条记录：${reason}` : `${others.length} more same-day record${others.length > 1 ? "s" : ""}: ${reason}`;
 }
 
 function ledgerNumber(row: LedgerRecord | undefined, key: string, fallback: number | null): number | null {
