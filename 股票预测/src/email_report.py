@@ -9,7 +9,7 @@ import pandas as pd
 
 from src.market_analyst import MarketSnapshot
 from src.news import NewsItem
-from src.forecast_text import forecast_sentence
+from src.forecast_text import arima_fallback_text, forecast_sentence
 
 
 def write_html_daily_report(
@@ -356,7 +356,7 @@ def _prediction_row(row: pd.Series) -> str:
     return f"""
       <tr>
         <td>{escape(str(row.get("Ticker", "")))}</td>
-        <td>{escape(str(row.get("Best_Model", "")))}</td>
+        <td>{escape(str(row.get("Best_Model", "")))}<br><small>{escape(arima_fallback_text(row))}</small></td>
         <td class="{_direction_class(row.get("Forecast_1D_Signal"))}">{escape(str(row.get("Forecast_1D_Signal", "")))}</td>
         <td>{escape(str(row.get("Signal_Quality", "")))}</td>
         <td>{escape(forecast_sentence(row))}</td>

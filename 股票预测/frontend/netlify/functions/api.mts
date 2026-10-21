@@ -1,4 +1,4 @@
-import { makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
@@ -3778,7 +3778,7 @@ async function publicHistory(symbol: string, start: string, source: string, asse
   throw new Error("该资产暂未接入云端行情。");
 }
 
-async function cachedPublicHistory(symbol: string, start: string, source: string, assetType: string): Promise<Record<string, unknown>> {
+async function cachedPublicHistory(symbol: string, start: string, source: string, assetType: string, forceRefresh = false): Promise<Record<string, unknown>> {
   const year = new Date().getUTCFullYear();
   const recentStart = `${year - 4}-01-01`;
   const longStart = `${year - 12}-01-01`;
@@ -3787,7 +3787,11 @@ async function cachedPublicHistory(symbol: string, start: string, source: string
     : start >= longStart
       ? { key: `long-${year - 12}`, start: longStart }
       : { key: "max", start: "1900-01-01" };
-  const fullHistory = await cachedValue(`history-v5/${window.key}/${symbol}/${source}/${assetType}`, 30 * 60, () => publicHistory(symbol, window.start, source, assetType));
+  // A forced forecast refresh must bypass memory, KV, in-flight and stale-on-error
+  // cache paths. Do not overwrite the shared cache with a racing refresh result.
+  const fullHistory = forceRefresh
+    ? await publicHistory(symbol, window.start, source, assetType)
+    : await cachedValue(`history-v5/${window.key}/${symbol}/${source}/${assetType}`, 30 * 60, () => publicHistory(symbol, window.start, source, assetType));
   const records = Array.isArray(fullHistory.records) ? fullHistory.records as HistoryRecord[] : [];
   const filtered = records.filter((row) => String(row.Date || "") >= start);
   return { ...fullHistory, records: filtered.length ? filtered : records };
@@ -4725,7 +4729,8 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
     || sameDay.some((row) => qualifyForecast(row).status === "eligible"))) return;
   records.push(candidate);
   records.sort((left, right) => String(right.As_Of_Date).localeCompare(String(left.As_Of_Date)));
-  await writeCloudLedger(ticker, records.slice(0, 260));
+  const retainedDates = new Set([...new Set(records.map((row) => String(row.As_Of_Date).slice(0, 10)))].slice(0, 260));
+  await writeCloudLedger(ticker, records.filter((row) => retainedDates.has(String(row.As_Of_Date).slice(0, 10))));
 }
 
 async function reconcileCloudLedger(symbol: string, records: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
@@ -5265,12 +5270,50 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>): Record<st
   };
 }
 
+function forecastUsesEquityCalendar(symbol: string, forecast: Record<string, unknown>): boolean {
+  return supportsEquityCalendar({ symbol }) || (forecast.evaluation_snapshot as EvaluationSnapshot | undefined)?.calendar === EQUITY_CALENDAR_VERSION;
+}
+
+function forecastReadyToPublish(symbol: string, forecast: Record<string, unknown>, now = Date.now()): boolean {
+  // Preflight only: can these inputs qualify if acknowledged now? Serving caches
+  // intentionally have frozen_at=null. This temporary value is NEVER returned,
+  // persisted, or used as proof of an actual freeze/settlement.
+  return qualifyForecast({ Ticker: symbol, As_Of_Date: forecast.data_as_of, Created_At: forecast.generated_at,
+    Evaluation_Snapshot: { ...(forecast.evaluation_snapshot as EvaluationSnapshot), frozen_at: new Date(now).toISOString() } }, "1D", now).status === "eligible";
+}
+
+async function forecastHistory(asset: Asset, start: string): Promise<Record<string, unknown>> {
+  let history = await cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type);
+  const window = supportsEquityCalendar(asset) ? currentPublicationWindow() : null;
+  if (!window) return history;
+  const ready = (value: Record<string, unknown>) => {
+    const records = Array.isArray(value.records) ? value.records as HistoryRecord[] : [];
+    const generated = new Date().toISOString();
+    return value.data_as_of === window.base_session && records.at(-1)?.Date === window.base_session
+      && forecastReadyToPublish(asset.symbol, { data_as_of: value.data_as_of, generated_at: generated,
+        evaluation_snapshot: makeEvaluationSnapshot(asset, records.at(-1) || {}, value.data_source, value.source_observed_at, generated) });
+  };
+  // Even a same-date daily bar may have been cached intraday or before the
+  // close-confirmation buffer. Refresh once; never stamp a stale bar as fresh.
+  if (!ready(history)) history = await cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type, true);
+  if (!ready(history)) throw new Error("Closed-session history is not ready for a qualified forecast.");
+  return history;
+}
+
 async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string | null): Promise<Record<string, unknown> | null> {
   const memory = MEMORY_FORECASTS.get(symbol.toUpperCase()) || null;
   const stored = await readStoredForecast(symbol).catch(() => null);
-  const cached = memory || stored;
+  const cached = [memory, stored].filter((value): value is Record<string, unknown> => value !== null)
+    .sort((a, b) => Date.parse(String(b.generated_at)) - Date.parse(String(a.generated_at)))[0] || null;
   const generatedAt = typeof cached?.generated_at === "string" ? new Date(cached.generated_at).getTime() : 0;
   if (!cached || !generatedAt || Date.now() - generatedAt > FORECAST_CACHE_MAX_AGE_MS) return null;
+  const window = forecastUsesEquityCalendar(symbol, cached) ? currentPublicationWindow() : null;
+  if (window) {
+    if (cached.data_as_of !== window.base_session || !forecastReadyToPublish(symbol, cached)) return null;
+    // The calendar already identifies the latest completed base. Do not let an
+    // older shared history cache reject a freshly regenerated serving forecast.
+    return applyCurrentForecastGuard(cached);
+  }
   let marketDate = expectedDataAsOf ? String(expectedDataAsOf).slice(0, 10) : "";
   if (!marketDate) {
     try {
@@ -5286,7 +5329,7 @@ async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string
   return applyCurrentForecastGuard(cached);
 }
 
-async function freezeCloudForecast(symbol: string, forecast: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function freezeCloudForecast(symbol: string, forecast: Record<string, unknown>, requireEligible = false): Promise<Record<string, unknown>> {
   const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
   // Unique append-only source evidence survives mutable forecast-cache replacement.
   const publicationId = crypto.randomUUID();
@@ -5294,6 +5337,9 @@ async function freezeCloudForecast(symbol: string, forecast: Record<string, unkn
   await store.setJSON(forecastKey(symbol), forecast);
   // Both immutable evidence and serving cache acknowledged, never report start/cache read time.
   const frozenAt = new Date().toISOString();
+  if (requireEligible && !forecastReadyToPublish(symbol, forecast, Date.parse(frozenAt))) {
+    throw new Error("Publication acknowledgement missed the qualified window; ledger entry skipped.");
+  }
   await recordCloudForecast(symbol, forecast, frozenAt, publicationId);
   rememberForecast(symbol, forecast);
   return forecast;
@@ -5332,7 +5378,7 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
   const asset = await resolveAsset(symbol);
   const start = new Date(Date.now() - 900 * 86400000).toISOString().slice(0, 10);
   const [history, benchmarkContext] = await Promise.all([
-    cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as Promise<{
+    forecastHistory(asset, start) as Promise<{
       data_as_of: string;
       snapshot: { latest_price: number; annualized_volatility_20d?: number | null };
       records: HistoryRecord[];
@@ -5588,8 +5634,17 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
 }
 
 async function generateAndFreezeCloudForecast(symbol: string, optimize = true): Promise<Record<string, unknown>> {
+  const startedWindow = currentPublicationWindow();
   const forecast = await cloudTrendForecast(symbol, optimize);
-  return freezeCloudForecast(String(forecast.symbol || symbol), forecast);
+  let requireEligible = false;
+  if (forecastUsesEquityCalendar(symbol, forecast)) {
+    const window = currentPublicationWindow();
+    requireEligible = Boolean(startedWindow || window);
+    if ((startedWindow || window) && (!window || forecast.data_as_of !== window.base_session || !forecastReadyToPublish(symbol, forecast))) {
+      throw new Error("The forecast no longer qualifies for the closed-session publication window.");
+    }
+  }
+  return freezeCloudForecast(String(forecast.symbol || symbol), forecast, requireEligible);
 }
 
 // Pure storage read shared with the legacy reader. No validation fetch, ledger, or writes.

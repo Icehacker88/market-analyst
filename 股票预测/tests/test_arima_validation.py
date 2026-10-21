@@ -181,11 +181,18 @@ class ArimaValidationTests(unittest.TestCase):
             path = Path(directory)
             pd.DataFrame([dict(Model="ARIMA", Directional_Accuracy=60, Balanced_Accuracy=60,
                 Majority_Baseline_Accuracy=50, Directional_Edge=10, CV_Directional_Accuracy=60,
-                CV_Balanced_Accuracy=60, CV_Directional_Edge=10, MAPE=1)]).to_csv(path / "model_comparison.csv", index=False)
+                CV_Balanced_Accuracy=60, CV_Directional_Edge=10, CV_Fallback_Count=22, CV_Samples=100, MAPE=1)]).to_csv(path / "model_comparison.csv", index=False)
             pd.DataFrame([dict(Predicted_Price=101, Predicted_Return=.01, Predicted_Direction="Up",
                 Forecast_Status="fallback", Fallback_Reason="non_convergence")]).to_csv(path / "forecast_1d_5d.csv", index=False)
             pd.DataFrame({"Price": [100]}).to_csv(path / "cleaned_prices.csv", index=False)
             summary = _read_model_summary("SPY", path)
+            metrics = pd.read_csv(path / "model_comparison.csv")
+            baseline = metrics.assign(Model="Baseline", CV_Fallback_Count=0)
+            pd.concat([baseline, metrics]).to_csv(path / "model_comparison.csv", index=False)
+            other_winner = _read_model_summary("SPY", path)
+            self.assertEqual(other_winner["Best_Model"], "Baseline")
+            self.assertEqual(other_winner["ARIMA_CV_Fallback_Count"], 22)
+            self.assertEqual(other_winner["ARIMA_CV_Samples"], 100)
         self.assertEqual(summary["Forecast_1D_Signal"], "Observe")
         self.assertEqual(summary["Signal_Quality"], "Low")
         row = _new_ledger_row(pd.Series(summary), datetime.now(timezone.utc), "2026-10-20")

@@ -1,9 +1,10 @@
 # FREEZE-DEDUPE-INTRADAY / ARIMA validation phase 2
 
-Owner: Codex. [PR #25](https://github.com/Icehacker88/market-analyst/pull/25). Status: implementation in review; cross-review by Claude Code pending.
+Owner: Codex. [PR #25](https://github.com/Icehacker88/market-analyst/pull/25). Status: Claude Code approved the ARIMA implementation at `7d0c987`; FREEZE P1/P2/P3 review fixes are ready for another review on the same branch.
 
 - Base: fresh `origin/main` `5f124e868bb4617f1512608ecef675dec293d000` (PR #24).
 - Branch: `codex/freeze-arima-phase2-20261020`; worktree: `/workspace/freeze-arima-phase2`. Started October 20; handoff October 21, Asia/Kuala_Lumpur.
+- Review follow-up fetched `origin/main` at `89103c5fd7f4caa1cddb2eb95ccf54477c6b320b`; changes since the original base are automated ledger updates. This follow-up retains the existing PR branch/base and does not modify that ledger.
 - Original `/workspace/market-analyst` checkout was clean and remains untouched. No open PRs at initial read; latest PR Checks and Daily Market Report were successful. GitHub deployment entries inspected were ledger jobs, not Cloudflare deployment evidence. PR #24 records Production `78128767`; this task has not independently revalidated the hosted revision or invoked any production forecast/history API.
 - No deployment, workflow dispatch, email, configuration/secret change, historical ledger rewrite or migration. This code changes future behavior only after merge (Python scheduled runs) and separately authorized deployment (Cloudflare).
 
@@ -13,11 +14,21 @@ Keep the first ledger observation for each symbol/base date, whether eligible, i
 
 For `frozen-close-v1`, all four horizons share the same first target open; 1D eligibility determines daily admission. Each horizon still verifies its own exact target-session prefix during scoring. A malformed longer-horizon snapshot is not repaired or replaced by this change. The close-confirmation buffer, exact target sessions and freeze acknowledgement still apply. A publication generated before the open but acknowledged after the open cannot claim qualification. No record is promoted by changing its old timestamps or by replaying an old serving cache.
 
-The existing immutable UUID archive and cache writes run before admission; archives are retained even when the ledger candidate is deduplicated. A previously blocked publication cannot be retroactively imported as timely. Only a future timely freeze can fill the eligible slot. Storage acknowledgements and failure ordering are unchanged.
+The existing immutable UUID archive and cache writes run before admission; archives are retained even when the ledger candidate is deduplicated. A previously blocked publication cannot be retroactively imported as timely. Only a future timely freeze can fill the eligible slot. Storage acknowledgements retain their original ordering; the review follow-up adds an admission check after acknowledgement when publication started in the qualified window.
 
-The active ledger may now contain the first excluded/unknown observation and the first eligible publication on the same date. Coverage counters count records, so they can exceed the number of dates; scoring, settlement and governance still use qualified outcomes only. The 260-record retention cap is unchanged: this may cover fewer dates. Old rows can still age out under that existing cap; this is not a new indefinite-retention guarantee. UI record keys already tolerate same-date entries.
+The active ledger may now contain the first excluded/unknown observation and the first eligible publication on the same date. Coverage counters count records, so they can exceed the number of dates; scoring, settlement and governance still use qualified outcomes only. Retention now keeps the latest **260 distinct base dates**, including all rows on the oldest retained date (normally at most 520 rows under the two-row policy). Older dates can still age out; no archive is deleted or lost history restored. Same-date evolution display is left to Claude Code as requested by the user; this follow-up makes no frontend UI changes.
 
 KV read/modify/write remains nontransactional. This fixes sequential admission, **not globally atomic first-writer selection**. Concurrent writes can still race as documented in Phase 1; no locks, Durable Objects, paid services or recovery job are added. Archive writes per freeze remain unchanged.
+
+## Review fixes: cache recovery and history freshness
+
+The reviewed US-equity calendar defines the publication window from the latest closed session's close + 15 minutes to the next session's open, including holidays, early closes and DST. Within this window, a forecast with an old base date or inputs that cannot qualify is a cache miss. A request can therefore regenerate the intraday forecast and append the first eligible record without changing the original row. This does not add an unattended scheduling trigger.
+
+Before model generation, history must contain the latest closed base date and an observation at or after its confirmation buffer. Stale dates, same-date intraday observations and missing observation evidence cause one forced provider fetch, bypassing the 30-minute memory/KV/in-flight/stale-on-error cache paths. If that result still cannot qualify, generation stops before freeze or ledger writes. The shared history cache is not overwritten by the forced result. A timely new forecast remains reusable even while that shared cache is old.
+
+Serving-cache snapshots intentionally carry `frozen_at=null`. The eligibility preflight uses a temporary prospective acknowledgement only to decide whether inputs could be published now; it never returns or persists that timestamp or uses it as settlement evidence. Actual ledger eligibility still uses the acknowledgement after the immutable archive and serving-cache writes. A computation crossing the next open stops before freeze; an acknowledgement crossing the open skips the ledger and leaves the already-written archive/cache with no asserted freeze acknowledgement.
+
+The newer generated timestamp wins when memory and persisted forecast caches disagree. Unknown markets are not assigned the US calendar. One forced provider pipeline can still use its existing provider fallback; it does not repeatedly retry until a desired result appears.
 
 ## ARIMA evaluation and selection
 
@@ -38,8 +49,18 @@ ARIMA forecast states are `ok` and `fallback`. Reasons include `insufficient_his
 - `prediction_results.csv` / `best_model_predictions.csv`: per-origin holdout status/reason.
 - ARIMA `forecast_1d_5d.csv`: status/reason for the actual current multi-horizon fit.
 - Daily prediction CSV and new ledger rows: `Model_Forecast_Status`, `Model_Fallback_Reason`. Old records retain missing diagnostics; there is no inference about historic fallback frequency. Existing unknown columns survive ledger loading/writing. CLI summary shows status/reason; CLI, daily action signal and Python API output all become Observe on fallback. The Python API also adds `model_forecast_status` / `model_fallback_reason`; old outputs without these diagnostics remain unknown.
+- Daily Markdown and HTML email display ARIMA `CV_Fallback_Count / CV_Samples` and its percentage, with an explanation that median-baseline fallbacks remain in scores. Counts come from the ARIMA metrics row even when another model wins. Missing/zero-sample diagnostics display as unavailable, not an invented zero fallback rate.
 
 ## Validation and limitations
+
+Review-fix validation (supersedes the earlier local-suite counts below):
+
+- `npm test` — **412/412 tests, 62 files pass**, including 20 new cache/window/retention regressions and the existing 10 freeze tests. The new generated-Worker Miniflare test exercises real cache, history admission, generation orchestration, freeze and ledger code; provider/asset IO and numerical model math are synthetic. It proves local control flow, not live provider availability.
+- `npm run typecheck` and `ORIVANE_SKIP_SEO_REFRESH=1 npm run build:cloudflare` — pass, 113 pages. Generated Worker refreshed from maintenance source; no auth code or timeout changes.
+- `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -m unittest discover -s tests -q` — **44/44 pass**, including daily Markdown/HTML fallback-count display and extraction when ARIMA is not selected.
+- `git diff --check` passes. Latest-commit GitHub CI is recorded in the PR; no deployment or production validation is claimed.
+
+Original phase-two validation before the review fixes:
 
 - Python: `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -m unittest discover -s tests -q` — 43 tests pass (run in `股票预测`). Covers gap alignment, every-origin visibility, future-label/price perturbations, missing feature bars, live final refit, CV/tie invariance, fallback causes/counts and daily/ledger propagation. Real statsmodels positive/negative synthetic means exercised. An initial low-variance fixture did not converge; its fallback was correctly exposed. The successful-fit smoke fixture uses 1% noise; deterministic tests separately force nonconvergence.
 - Diagnostic regression: `python -m unittest discover -s scripts/diagnostics -p 'test_*.py' -q` — 5 pass.
@@ -54,4 +75,6 @@ No fresh independent historical OHLC export exists in this checkout, so no new m
 
 ## Review and rollback
 
-Review append-only same-day admission and failure ordering, per-origin time bounds (including feature gaps), holdout-independent score/tie ordering, and fallback propagation. All changes are on the task branch. Cross-review and human merge remain pending; no self-approval or merge. Cloudflare release still needs separate authorization. Revert the implementation commit to roll back code; do not delete appended records or archives or rewrite settled outcomes. The old code's date-only dedupe will not remove already-appended records.
+The review follow-up changes exactly `docs/{TASKS,PROJECT_STATUS,forecast-phase2-2026-10-21}.md`, `股票预测/frontend/netlify/functions/{api.mts,_shared/forecast-eligibility.ts}`, `股票预测/frontend/tests/forecast-cache-recovery.test.ts`, `股票预测/src/{daily_report,email_report,forecast_text}.py`, and `股票预测/tests/{test_arima_validation,test_forecast_text}.py`.
+
+Claude Code's review at `7d0c987` accepts ARIMA alignment, CV-only selection and fallback propagation. Next: review cache invalidation through real generation/append, one-shot history freshness, acknowledgement deadline, 260-date retention and report counts on the new commit after CI. Human merge remains pending; no self-approval or merge. Cloudflare release still needs separate authorization. Revert code through review to roll back; do not delete appended records or archives or rewrite settled outcomes. The old code's date-only dedupe will not remove already-appended records.
