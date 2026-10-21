@@ -1,5 +1,6 @@
 import calendar from "../../../../contracts/us-equity-calendar.json";
 
+export const EQUITY_CALENDAR_VERSION = calendar.version;
 export const TIMING_PROTOCOL = "frozen-close-v1";
 export const HORIZON_DAYS: Record<string, number> = { "1D": 1, "5D": 5, "10D": 10, "1M": 22 };
 // Live freeze/settlement basis. Adj Close rewrites every past day at each ex-dividend date,
@@ -50,8 +51,31 @@ export function followingSessions(day: string, count: number): string[] {
   followingCache.set(key, Object.freeze([...days]));
   return days;
 }
+type EquityIdentity = { symbol: string; asset_type?: string; exchange?: string | null; currency?: string | null };
+export function supportsEquityCalendar(asset: EquityIdentity): boolean {
+  return knownSymbols.has(asset.symbol) || (["stock", "etf"].includes(asset.asset_type || "") && asset.currency === "USD" && ["NYSE", "NYSE Arca", "NASDAQ", "NMS", "NGM", "NCM", "NYQ", "PCX", "ASE", "AMEX", "BATS"].includes(asset.exchange || ""));
+}
+// Call only for an identified US equity. Exchange-local dates, reviewed holidays,
+// early closes and DST determine the latest completed session and its window.
+export function currentPublicationWindow(now = Date.now()): { base_session: string; confirmed_at: number; next_open: number } | null {
+  if (!Number.isFinite(now)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const part = (name: string) => parts.find((p) => p.type === name)!.value;
+  const localDay = `${part("year")}-${part("month")}-${part("day")}`;
+  if (localDay < calendar.first_date || localDay > calendar.last_date) return null;
+  for (let offset = 0; offset < 10; offset++) {
+    const day = new Date(Date.parse(`${localDay}T00:00:00Z`) - offset * 86400000).toISOString().slice(0, 10);
+    const times = equitySession(day);
+    if (!times || times.close > now) continue;
+    const next = followingSessions(day, 1)[0];
+    const nextOpen = next ? equitySession(next)?.open : null;
+    return nextOpen && now >= times.close + 900000 && now < nextOpen
+      ? { base_session: day, confirmed_at: times.close + 900000, next_open: nextOpen } : null;
+  }
+  return null;
+}
 export function makeEvaluationSnapshot(asset: { symbol: string; asset_type?: string; exchange?: string | null; currency?: string | null }, base: Row, source: unknown, observed: unknown, generated: string): EvaluationSnapshot {
-  const supported = knownSymbols.has(asset.symbol) || (["stock", "etf"].includes(asset.asset_type || "") && asset.currency === "USD" && ["NYSE", "NYSE Arca", "NASDAQ", "NMS", "NGM", "NCM", "NYQ", "PCX", "ASE", "AMEX", "BATS"].includes(asset.exchange || ""));
+  const supported = supportsEquityCalendar(asset);
   const close = finitePositive(base.Close) ? base.Close : null;
   return { schema_version: TIMING_PROTOCOL, calendar: supported ? calendar.version : null, symbol: asset.symbol, base_session: String(base.Date || ""), base_price: close,
     price_basis: close === null ? null : SETTLEMENT_BASIS, source: typeof source === "string" ? source : null, source_observed_at: typeof observed === "string" ? observed : null,

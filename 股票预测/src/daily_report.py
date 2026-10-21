@@ -11,7 +11,7 @@ from src.forecast_eligibility import SETTLEMENT_BASIS, make_snapshot, qualify
 from src.preprocessing import clean_price_data
 from src.emailer import send_report_email
 from src.email_report import write_html_daily_report
-from src.forecast_text import forecast_sentence
+from src.forecast_text import arima_fallback_text, forecast_sentence
 from src.gpt_analysis import generate_market_commentary
 from src.market_analyst import MARKET_ASSETS, MarketSnapshot, analyze_market_frame, save_market_snapshot
 from src.models import actionable_signal, classify_signal_quality
@@ -189,10 +189,15 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
     latest_price = float(pd.read_csv(model_dir / "cleaned_prices.csv")["Price"].iloc[-1])
     five_day_return = float(last["Predicted_Price"]) / latest_price - 1
     quality = classify_signal_quality(best)
+    forecast_status = first.get("Forecast_Status", "ok")
+    if forecast_status == "fallback":
+        quality = "Low"
     result = {
         "Ticker": ticker,
         "Model_Dir": str(model_dir),
         "Best_Model": best["Model"],
+        "Model_Forecast_Status": forecast_status,
+        "Model_Fallback_Reason": first.get("Fallback_Reason", ""),
         "Forecast_1D_Return": first["Predicted_Return"],
         "Forecast_1D_Price": first["Predicted_Price"],
         "Forecast_1D_Direction": first["Predicted_Direction"],
@@ -211,6 +216,9 @@ def _read_model_summary(ticker: str, model_dir: Path) -> dict[str, object]:
         "MAPE": best["MAPE"],
         "Error": "",
     }
+    arima = metrics.loc[metrics["Model"] == "ARIMA"]
+    for metric in ("CV_Fallback_Count", "CV_Samples"):
+        result[f"ARIMA_{metric}"] = arima.iloc[0].get(metric) if not arima.empty else None
     risk_path = model_dir / "risk_forecast_5d.csv"
     if risk_path.exists():
         risk = pd.read_csv(risk_path).iloc[0]
@@ -377,6 +385,7 @@ def _prediction_summary_text(frame: pd.DataFrame) -> str:
                 f"多数类基准 {_fmt_num(row['Majority_Baseline_Accuracy'])}%，"
                 f"滚动验证方向准确率 {_fmt_num(row['CV_Directional_Accuracy'])}%，"
                 f"滚动验证方向优势 {_fmt_num(row['CV_Directional_Edge'])} 个百分点，"
+                f"{arima_fallback_text(row)}"
                 f"未来5日风险 {row.get('Risk_5D_Status', 'N/A')}，"
                 f"高波动概率 {_fmt_pct(row.get('Risk_5D_Probability'))}"
             )
@@ -389,7 +398,7 @@ def _all_asset_forecasts(frame: pd.DataFrame) -> str:
         if row.get("Error"):
             lines.append(f"- {row['Ticker']}：预测暂不可用。")
         else:
-            lines.append(f"- {row['Ticker']}：{forecast_sentence(row)}")
+            lines.append(f"- {row['Ticker']}：{forecast_sentence(row)}{arima_fallback_text(row)}")
     return "\n".join(lines) if lines else "预测暂不可用。"
 
 
