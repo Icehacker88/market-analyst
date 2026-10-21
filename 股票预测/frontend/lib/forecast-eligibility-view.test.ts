@@ -1,10 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { edgeClass, eligibilityCounts, forecastLiveEvidence, isQualifiedStat, reasonBreakdown, reasonLabel, recordState, stateReasonCode } from "./forecast-eligibility-view";
+import { edgeClass, eligibilityCounts, forecastLiveEvidence, isQualifiedStat, onePerBaseDate, reasonBreakdown, reasonLabel, recordState, stateReasonCode } from "./forecast-eligibility-view";
 import type { Forecast } from "./types";
 
 const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1" }, "5D": { status, reason, protocol: "frozen-close-v1" } });
 
 describe("frozen forecast eligibility view", () => {
+  it("shows one change-log entry per base date, preferring the eligible same-day row", () => {
+    const intraday = { As_Of_Date: "2026-10-20", Publication_ID: "intraday", Time_Eligibility: timing("ineligible", "base_session_unclosed") };
+    const closed = { As_Of_Date: "2026-10-20", Publication_ID: "closed", Time_Eligibility: timing("eligible", "qualified") };
+    const prior = { As_Of_Date: "2026-10-19", Publication_ID: "prior", Time_Eligibility: timing("unknown", "legacy_snapshot_missing") };
+    const entries = onePerBaseDate([intraday, closed, prior]);
+    expect(entries.map((entry) => entry.row.Publication_ID)).toEqual(["closed", "prior"]);
+    expect(entries[0].others).toEqual([intraday]);
+    expect(reasonLabel(stateReasonCode(entries[0].others[0], "1D"), true)).toBe("基准交易日尚未收盘");
+    expect(entries[1].others).toEqual([]);
+    // Order within a date does not matter; without an eligible row the first is kept.
+    expect(onePerBaseDate([closed, intraday])[0].row).toBe(closed);
+    const second = { ...intraday, Publication_ID: "second" };
+    expect(onePerBaseDate([intraday, second]).map((entry) => [entry.row.Publication_ID, entry.others.length])).toEqual([["intraday", 1]]);
+    // Rows without a date never merge with each other.
+    expect(onePerBaseDate([{ Publication_ID: "a" }, { Publication_ID: "b" }])).toHaveLength(2);
+    // Timestamped dates group by the calendar day.
+    expect(onePerBaseDate([{ ...closed, As_Of_Date: "2026-10-20T20:16:00Z" }, intraday])).toHaveLength(1);
+  });
+
   it("counts only verified records and keeps every other outcome visible with a reason", () => {
     const counted = { Verified: true, Actual_1D_Return: 0.01, Time_Eligibility: timing("eligible", "qualified"), Outcome_Observed: { "1D": true } };
     const late = { Verified: false, Actual_1D_Return: 0.01, Time_Eligibility: timing("ineligible", "published_after_target_open"), Outcome_Observed: { "1D": true } };

@@ -75,6 +75,23 @@ export function stateReasonCode(row: LedgerRecord, horizon: string): string | nu
   return timing.reason || "legacy_snapshot_missing";
 }
 
+// One entry per base date for change logs. A base date can hold two rows: the cloud
+// keeps the first (often intraday) record and appends the first timing-eligible
+// publication after the close. Show the eligible row; keep the others as context.
+export function onePerBaseDate(records: LedgerRecord[]): { row: LedgerRecord; others: LedgerRecord[] }[] {
+  const groups = new Map<string, LedgerRecord[]>();
+  records.forEach((row, index) => {
+    const day = String(row.As_Of_Date || "").slice(0, 10) || `#${index}`;
+    const group = groups.get(day);
+    if (group) group.push(row);
+    else groups.set(day, [row]);
+  });
+  return [...groups.values()].map((rows) => {
+    const chosen = Math.max(0, rows.findIndex((row) => qualification(row, "1D")?.status === "eligible"));
+    return { row: rows[chosen], others: rows.filter((_, index) => index !== chosen) };
+  });
+}
+
 export function isCounted(row: LedgerRecord, horizon: string): boolean {
   return recordState(row, horizon) === "counted";
 }
