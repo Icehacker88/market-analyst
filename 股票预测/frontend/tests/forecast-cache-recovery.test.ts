@@ -18,6 +18,13 @@ function forecast(generated = "2026-10-20T19:59:00Z", day = "2026-10-20") {
   return { symbol: "SPY", data_as_of: day, generated_at: generated, forecast_1d_return: .01,
     evaluation_snapshot: makeEvaluationSnapshot({ symbol: "SPY" }, history(day).records[0], "yahoo", generated, generated) };
 }
+// Enough walk-forward, calibration and live evidence to pass the action gate.
+function actionable<T extends object>(value: T) {
+  return { ...value, forecast_1m_return: .05, confidence_score: 80,
+    validation: { backtest: { samples: 100, direction_edge: 10 }, live: { samples: 30, direction_edge: 10 } },
+    calibration: { sample_size: 30, direction_hit_rate: 65 },
+    key_levels: { support: 95, resistance: 110, stop_loss: 90, breakout: 111, invalidation: 90 } };
+}
 function ledgerRow(value = forecast()) {
   return { Ticker: "SPY", As_Of_Date: value.data_as_of, Created_At: value.generated_at,
     Publication_ID: "original", Forecast_1D_Return: .01,
@@ -146,6 +153,22 @@ describe("closed-session cache recovery", () => {
     expect(result.providerCalls).toBe(1);
     expect(result.rows).toEqual([original]);
     expect(result.writes.map((w:any)=>w.key)).toEqual([expect.stringContaining("forecast-history-refresh-v1")]);
+  });
+  it("downgrades a pending older-base fallback to Observe while keeping its numbers", async () => {
+    const current=await run({cached:actionable(forecast(postClose)),rows:[ledgerRow()],providerError:true});
+    expect(current.data.action.actionable).toBe(true); // control: the fixture passes the gate when current
+    const cached=actionable(forecast("2026-10-19T21:00:00Z","2026-10-19"));
+    const result=await run({operation:"serve",cached,rows:[ledgerRow(cached)],cachedHistory:history("2026-10-19"),freshHistory:history("2026-10-19")});
+    for (const served of [result.data,result.second]) {
+      expect(served.publication_pending).toBe(true);
+      expect(served.action.actionable).toBe(false);
+      expect(served.signal).toBe("Observe");
+      expect(served.action.abstain_reason_zh).toContain("等待按最新交易日重新计算");
+      expect(served.forecast_1m_return).toBe(.05);
+      expect(served.generated_at).toBe(cached.generated_at);
+      expect(served.evaluation_snapshot).toEqual(cached.evaluation_snapshot);
+    }
+    expect(result.rows).toEqual([ledgerRow(cached)]);
   });
   it("retries the provider after the refresh cooldown expires", async () => {
     const result=await run({operation:"serve",cached:forecast(),rows:[ledgerRow()],cachedHistory:history("2026-10-19"),

@@ -5216,7 +5216,7 @@ async function cloudLedgerHistory(symbol: string): Promise<Record<string, unknow
   return buildLedgerHistory(symbol, reconciled);
 }
 
-function applyCurrentForecastGuard(forecast: Record<string, unknown>): Record<string, unknown> {
+function applyCurrentForecastGuard(forecast: Record<string, unknown>, fresh = true): Record<string, unknown> {
   const horizonModels = Array.isArray(forecast.horizon_models) ? forecast.horizon_models as Array<Record<string, unknown>> : [];
   const month = horizonModels.find((item) => String(item.horizon) === "1M");
   const validation = forecast.validation && typeof forecast.validation === "object" ? forecast.validation as Record<string, unknown> : {};
@@ -5244,7 +5244,7 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>): Record<st
       calibration_hit_rate: toNumber(month?.direction_probability ?? calibration.direction_hit_rate),
       live_samples: Number(live.samples || 0),
       live_edge: toNumber(live.direction_edge),
-      fresh: true,
+      fresh,
     },
   );
   const routedSignalValue = (toNumber(forecast.forecast_1d_return) || 0) * 0.25
@@ -5304,8 +5304,8 @@ async function forecastHistory(asset: Asset, start: string): Promise<Record<stri
 async function refreshedForecastHistory(asset: Asset, start: string): Promise<Record<string, unknown>> {
   // Request-scoped memory does not survive between Worker requests, so the forced
   // refresh keeps its own short KV entry (separate from the shared history cache).
-  // Failures are cached too: a lagging or failing provider is asked at most once
-  // per symbol every five minutes, not once per request.
+  // Failures are cached too. Best effort only: it stops serial repeats once the KV
+  // write is visible, but concurrent misses can still each call the provider.
   const refreshed = await cachedValue(`forecast-history-refresh-v1/${asset.symbol}/${asset.data_source}/${asset.asset_type}/${start}`, FORECAST_HISTORY_REFRESH_SECONDS,
     () => cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type, true)
       .catch((cause) => ({ refresh_error: cause instanceof Error ? cause.message : "Market data unavailable." }))) as Record<string, unknown>;
@@ -5333,7 +5333,9 @@ async function servingCloudForecast(symbol: string, optimize = false): Promise<R
   } catch (cause) {
     const previous = await newestCachedForecast(symbol).catch(() => null);
     if (!previous) throw cause;
-    return applyCurrentForecastGuard({ ...previous, publication_pending: true });
+    // The current reader already rejected this forecast (older base or unqualified
+    // inputs). Keep its numbers and snapshot, but never present it as actionable.
+    return applyCurrentForecastGuard({ ...previous, publication_pending: true }, false);
   }
 }
 
