@@ -1,0 +1,161 @@
+// Reference copy of the two functions as they were at main 4933b9e, before the
+// walk-forward CPU optimisation (PR #32). tests/walk-forward-cpu.test.ts swaps them
+// into a second bundle and requires the optimised code to match them exactly in the
+// same runtime. Read as text only; it is not compiled or imported.
+
+function kronosKlineForecast(rows: HistoryRecord[], returns: number[], latestPrice: number, dailyVolatility: number, volumeRatio: number): KlineForecastSignal {
+  const candles = rows.map((row, index) => {
+    const close = rowNumber(row, "Close", rowNumber(row, "Price", latestPrice)) || latestPrice;
+    const open = rowNumber(row, "Open", index ? rowNumber(rows[index - 1], "Close", rowNumber(rows[index - 1], "Price", close)) : close) || close;
+    const high = Math.max(rowNumber(row, "High", close) || close, open, close);
+    const low = Math.min(rowNumber(row, "Low", close) || close, open, close);
+    const volume = rowNumber(row, "Volume", null);
+    const range = Math.max(0, high - low);
+    const body = close - open;
+    const bodyReturn = open > 0 ? body / open : 0;
+    const rangePct = close > 0 ? range / close : 0;
+    const closeLocation = range > 0 ? (close - low) / range : 0.5;
+    const upperWick = range > 0 ? (high - Math.max(open, close)) / range : 0;
+    const lowerWick = range > 0 ? (Math.min(open, close) - low) / range : 0;
+    const previousClose = index ? rowNumber(rows[index - 1], "Close", rowNumber(rows[index - 1], "Price", close)) || close : close;
+    return {
+      open,
+      high,
+      low,
+      close,
+      volume,
+      range,
+      bodyReturn,
+      rangePct,
+      closeLocation,
+      upperWick,
+      lowerWick,
+      gapReturn: previousClose > 0 ? open / previousClose - 1 : 0,
+    };
+  });
+  const recent = candles.slice(-20);
+  const recent5 = candles.slice(-5);
+  const latest = candles.at(-1)!;
+  const volatilityScale = Math.max(0.004, dailyVolatility || standardDeviation(returns.slice(-20)) || 0.012);
+  const averageRange20 = mean(recent.map((item) => item.rangePct)) || volatilityScale * 1.5;
+  const averageRange5 = mean(recent5.map((item) => item.rangePct)) || averageRange20;
+  const atr20 = mean(recent.map((item) => item.range)) || latest.close * volatilityScale;
+  const volumeValues = recent.map((item) => item.volume).filter((value): value is number => Number.isFinite(value || NaN) && Number(value) > 0);
+  const averageVolume20 = mean(volumeValues) || null;
+  const rangeRatio = averageRange20 > 0 ? averageRange5 / averageRange20 : 1;
+  const bodyPressure = mean(recent5.map((item, index) => item.bodyReturn * (index + 1))) || 0;
+  const closePressure = mean(recent5.map((item) => (item.closeLocation - 0.5) * item.rangePct)) || 0;
+  const patternScore = clamp((bodyPressure * 0.62 + closePressure * 0.38) / volatilityScale, -1, 1);
+  const wickScore = clamp((latest.lowerWick - latest.upperWick) * latest.rangePct / volatilityScale, -1, 1);
+  const high20 = Math.max(...recent.map((item) => item.high));
+  const low20 = Math.min(...recent.map((item) => item.low));
+  const rangePosition = high20 > low20 ? (latest.close - low20) / (high20 - low20) : 0.5;
+  const rangeScore = clamp((rangePosition - 0.5) * 1.8 + (latest.close >= high20 * 0.998 ? 0.35 : latest.close <= low20 * 1.002 ? -0.35 : 0), -1, 1);
+  const volumeScore = averageVolume20 && latest.volume
+    ? clamp(Math.log(Math.max(0.1, latest.volume / averageVolume20)) * Math.sign(patternScore || rangeScore || returns.at(-1) || 1), -1, 1)
+    : clamp((volumeRatio - 1) * Math.sign(patternScore || rangeScore || 1), -1, 1);
+  const compressionScore = clamp((1 - rangeRatio) * Math.sign(rangeScore || patternScore || returns.at(-1) || 1), -0.8, 0.8);
+  const gapScore = clamp(latest.gapReturn / volatilityScale, -0.7, 0.7);
+  const score = clamp(patternScore * 0.32 + rangeScore * 0.24 + wickScore * 0.16 + volumeScore * 0.14 + compressionScore * 0.09 + gapScore * 0.05, -1, 1);
+  const forecast1d = clamp(score * volatilityScale * 0.82, -1.35 * volatilityScale, 1.35 * volatilityScale);
+  const forecastVolatility1m = clamp(Math.sqrt(averageRange20 ** 2 + volatilityScale ** 2) * Math.sqrt(22) * (rangeRatio > 1.25 ? 1.12 : rangeRatio < 0.75 ? 0.92 : 1), 0.015, 0.65);
+  const labelZh = score > 0.35 ? "K线结构偏多" : score < -0.35 ? "K线结构偏空" : "K线结构中性";
+  const labelEn = score > 0.35 ? "Bullish K-line structure" : score < -0.35 ? "Bearish K-line structure" : "Neutral K-line structure";
+  return {
+    model: "Orivane K-Line Structure",
+    label_zh: labelZh,
+    label_en: labelEn,
+    score,
+    forecast1d,
+    pattern_score: patternScore,
+    volume_score: volumeScore,
+    range_score: rangeScore,
+    reversal_score: wickScore,
+    gap_score: gapScore,
+    atr_20: atr20,
+    range_ratio_5_20: rangeRatio,
+    forecast_volatility_1m: forecastVolatility1m,
+    drivers_zh: [
+      `${labelZh}：近 5 根K线实体与收盘位置得分 ${patternScore.toFixed(2)}。`,
+      `量价确认得分 ${volumeScore.toFixed(2)}，近 5/20 日振幅比 ${rangeRatio.toFixed(2)}。`,
+      `最新K线下影/上影修正得分 ${wickScore.toFixed(2)}，ATR20 约 ${atr20.toFixed(2)}。`,
+    ],
+    drivers_en: [
+      `${labelEn}: recent 5-candle body and close-location score is ${patternScore.toFixed(2)}.`,
+      `Volume confirmation score is ${volumeScore.toFixed(2)} and 5/20-day range ratio is ${rangeRatio.toFixed(2)}.`,
+      `Latest lower/upper wick adjustment is ${wickScore.toFixed(2)} and ATR20 is about ${atr20.toFixed(2)}.`,
+    ],
+  };
+}
+
+function historicalAnalogForecast(rows: HistoryRecord[], dailyVolatility: number): HistoricalAnalogSignal {
+  const prices = rows.map((row) => Number(row.Price));
+  const dailyReturns = prices.map((price, index) => index ? price / prices[index - 1] - 1 : 0);
+  const vectors = prices.map((price, index) => {
+    if (index < 50 || !Number.isFinite(price) || price <= 0) return null;
+    const ma20 = Number(rows[index].MA_20) || mean(prices.slice(index - 19, index + 1)) || price;
+    const ma50 = Number(rows[index].MA_50) || mean(prices.slice(index - 49, index + 1)) || ma20;
+    const localVolatility = standardDeviation(dailyReturns.slice(Math.max(1, index - 19), index + 1)) || dailyVolatility || 0.012;
+    const rsiValue = Number(rows[index].RSI_14);
+    const macdValue = Number(rows[index].MACD_Hist);
+    const volume = Number(rows[index].Volume);
+    const recentVolumes = rows.slice(Math.max(0, index - 19), index + 1).map((row) => Number(row.Volume)).filter(Number.isFinite);
+    const averageVolume = mean(recentVolumes) || volume || 1;
+    const scaled = (value: number, denominator: number) => clamp(value / Math.max(denominator, 0.0001), -4, 4);
+    return [
+      scaled(dailyReturns[index], localVolatility),
+      scaled(price / prices[index - 5] - 1, localVolatility * Math.sqrt(5)),
+      scaled(price / prices[index - 20] - 1, localVolatility * Math.sqrt(20)),
+      scaled(price / ma20 - 1, localVolatility * Math.sqrt(20)),
+      scaled(ma20 / ma50 - 1, localVolatility * Math.sqrt(30)),
+      Number.isFinite(rsiValue) ? clamp((rsiValue - 50) / 20, -2.5, 2.5) : 0,
+      Number.isFinite(macdValue) ? scaled(macdValue / price, localVolatility) : 0,
+      Number.isFinite(volume) && averageVolume > 0 ? clamp(Math.log(Math.max(0.1, volume / averageVolume)), -2, 2) : 0,
+    ];
+  });
+  const currentIndex = rows.length - 1;
+  const current = vectors[currentIndex];
+  if (!current) {
+    return { forecasts: { d1: 0, d5: 0, d10: 0, d22: 0 }, sample_size: 0, up_probability: { "1D": null, "5D": null, "10D": null, "1M": null }, drivers_zh: ["历史相似状态样本不足。"], drivers_en: ["Insufficient historical analog samples."] };
+  }
+  const horizons = [
+    { label: "1D" as const, days: 1, key: "d1" as const },
+    { label: "5D" as const, days: 5, key: "d5" as const },
+    { label: "10D" as const, days: 10, key: "d10" as const },
+    { label: "1M" as const, days: 22, key: "d22" as const },
+  ];
+  const forecasts: HorizonForecasts = { d1: 0, d5: 0, d10: 0, d22: 0 };
+  const upProbability: HistoricalAnalogSignal["up_probability"] = { "1D": null, "5D": null, "10D": null, "1M": null };
+  let minimumSample = Infinity;
+  horizons.forEach(({ label, days, key }) => {
+    const candidates = vectors
+      .slice(0, Math.max(0, currentIndex - days + 1))
+      .map((vector, index) => {
+        if (!vector || index + days >= currentIndex) return null;
+        const distance = mean(vector.map((value, featureIndex) => Math.abs(value - current[featureIndex]))) || 0;
+        const actualReturn = prices[index + days] / prices[index] - 1;
+        return Number.isFinite(actualReturn) ? { distance, actualReturn } : null;
+      })
+      .filter((item): item is { distance: number; actualReturn: number } => Boolean(item))
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, 35);
+    minimumSample = Math.min(minimumSample, candidates.length);
+    if (candidates.length < 12) return;
+    const weighted = candidates.map((item) => ({ ...item, weight: 1 / (0.15 + item.distance) ** 2 }));
+    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+    const averageReturn = weighted.reduce((sum, item) => sum + item.actualReturn * item.weight, 0) / totalWeight;
+    const probability = weighted.reduce((sum, item) => sum + (item.actualReturn >= 0 ? item.weight : 0), 0) / totalWeight;
+    const sign = probability >= 0.5 ? 1 : -1;
+    const probabilityMagnitude = dailyVolatility * Math.sqrt(days) * Math.abs(probability - 0.5) * 1.2;
+    forecasts[key] = clamp(sign * Math.max(Math.abs(averageReturn) * 0.62, probabilityMagnitude), -dailyVolatility * Math.sqrt(days) * 2.2, dailyVolatility * Math.sqrt(days) * 2.2);
+    upProbability[label] = probability * 100;
+  });
+  const sampleSize = Number.isFinite(minimumSample) ? minimumSample : 0;
+  return {
+    forecasts,
+    sample_size: sampleSize,
+    up_probability: upProbability,
+    drivers_zh: [`从最近历史中匹配 ${sampleSize} 个最相似状态，分别估计各周期结果。`, `相似状态上涨比例：1日 ${upProbability["1D"]?.toFixed(1) ?? "—"}%、5日 ${upProbability["5D"]?.toFixed(1) ?? "—"}%、1个月 ${upProbability["1M"]?.toFixed(1) ?? "—"}%。`],
+    drivers_en: [`Matched ${sampleSize} nearest historical states and estimated each horizon separately.`, `Analog up rates: 1D ${upProbability["1D"]?.toFixed(1) ?? "—"}%, 5D ${upProbability["5D"]?.toFixed(1) ?? "—"}% and 1M ${upProbability["1M"]?.toFixed(1) ?? "—"}%.`],
+  };
+}

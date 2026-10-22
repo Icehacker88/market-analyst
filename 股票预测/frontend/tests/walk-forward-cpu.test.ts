@@ -1,38 +1,72 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import ts from "typescript";
 
 // A cold `predictions/history` request runs the 120-day walk-forward backtest inline.
-// On Workers Free (10 ms CPU) the original implementation took ~75 ms for a 900-day
-// history and failed with 1102. These digests were captured from that implementation
-// (main 4933b9e); the optimisation must keep every forecast and outcome byte-identical.
-// Change them only together with an intentional model change.
-const GOLDEN: Record<"equity" | "flatFund" | "sparse", { walkForward: string; trend: string }> = {
-  equity: { walkForward: "3110bef941787e6eadc47dba913caf47", trend: "1badabd24ce0756d4ae8e172f5dc2e91" },
-  flatFund: { walkForward: "f73b61e12e55ef6e46f5938ba39dcd08", trend: "07279008f4e57fb8885738a3a2b5b0be" },
-  sparse: { walkForward: "e74493f022aab68752b1aa8463117060", trend: "648e6590a7f5f393df04195be73970ef" },
-};
+// On Workers Free (10 ms CPU) the original implementation took ~75 ms locally for a
+// 900-day history and failed with 1102. Faster local runs do not prove the hosted
+// request now fits that budget; only a measured deployment can.
+//
+// Contract: the optimised functions must return exactly what the originals from main
+// 4933b9e (tests/fixtures/walk-forward-reference-4933b9e.txt) return in the same
+// runtime. A stored digest is not portable: Math.log/exp/pow return different floats
+// for some inputs on arm64 macOS than on x86-64 Linux CI, so a few rows differ between
+// platforms for old and new code alike (PR #32 diagnostic runs 39724511646/39724514459).
+const REFERENCE_FUNCTIONS = ["kronosKlineForecast", "historicalAnalogForecast"];
+const KINDS = ["equity", "flatFund", "sparse"] as const;
+type Kind = typeof KINDS[number];
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 let api: any;
+let reference: any;
 let directory: string;
+
+function functionDeclarations(source: string): Map<string, ts.FunctionDeclaration> {
+  const tree = ts.createSourceFile("source.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const found = new Map<string, ts.FunctionDeclaration>();
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && REFERENCE_FUNCTIONS.includes(node.name.text)) found.set(node.name.text, node);
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return found;
+}
+
+async function load(source: string, name: string) {
+  const result = await build({ stdin: { contents: source, loader: "ts", resolveDir: `${root}functions/api` }, bundle: true, write: false, format: "esm", platform: "neutral", mainFields: ["module", "main"], target: "es2022" });
+  const file = join(directory, `${name}.mjs`);
+  await writeFile(file, result.outputFiles[0].text);
+  const store = { get: async () => null, setJSON: async () => {}, set: async () => {}, delete: async () => {}, list: async () => ({ blobs: [] }) };
+  return (await import(pathToFileURL(file).href)).createApi({ env: {}, getStore: () => store, getDeployStore: () => store, sendEmail: async () => false });
+}
 
 beforeAll(async () => {
   let source = await readFile(`${root}functions/api/[[path]].ts`, "utf8");
   const marker = "return { handle, recordCacheMetric };";
   expect(source.split(marker)).toHaveLength(2);
-  source = source.replace(marker, "return { handle, recordCacheMetric, walkForwardEvaluationRows, trendForecast, technicalRecords };");
-  const result = await build({ stdin: { contents: source, loader: "ts", resolveDir: `${root}functions/api` }, bundle: true, write: false, format: "esm", platform: "neutral", mainFields: ["module", "main"], target: "es2022" });
+  source = source.replace(marker, "return { handle, recordCacheMetric, walkForwardEvaluationRows, trendForecast, technicalRecords, nearestAnalogs };");
+  // Swap the two optimised declarations for the 4933b9e originals; everything else is shared.
+  const originalText = await readFile(`${root}tests/fixtures/walk-forward-reference-4933b9e.txt`, "utf8");
+  const originals = functionDeclarations(originalText);
+  const current = [...functionDeclarations(source).values()];
+  expect(originals.size).toBe(REFERENCE_FUNCTIONS.length);
+  expect(current).toHaveLength(REFERENCE_FUNCTIONS.length);
+  let referenceSource = source;
+  for (const node of current.sort((left, right) => right.getStart() - left.getStart())) {
+    const original = originals.get(node.name!.text)!;
+    referenceSource = referenceSource.slice(0, node.getStart()) + original.getText() + referenceSource.slice(node.end);
+  }
+  expect(source).toContain("nearestAnalogs(neighbours, 56)");
+  expect(referenceSource).not.toContain("nearestAnalogs(neighbours, 56)");
+  expect(referenceSource).toContain(".slice(0, 35);");
   directory = await mkdtemp(join(tmpdir(), "orivane-walk-forward-"));
-  const file = join(directory, "worker.mjs");
-  await writeFile(file, result.outputFiles[0].text);
-  const store = { get: async () => null, setJSON: async () => {}, set: async () => {}, delete: async () => {}, list: async () => ({ blobs: [] }) };
-  api = (await import(pathToFileURL(file).href)).createApi({ env: {}, getStore: () => store, getDeployStore: () => store, sendEmail: async () => false });
+  api = await load(source, "optimised");
+  reference = await load(referenceSource, "reference");
 }, 30000);
 afterAll(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
@@ -54,14 +88,15 @@ function tradingTimestamps(count: number): number[] {
   return timestamps;
 }
 
-function fixture(kind: keyof typeof GOLDEN) {
+function fixture(kind: Kind) {
   const next = random({ equity: 7, flatFund: 11, sparse: 13 }[kind]);
   const count = { equity: 1205, flatFund: 700, sparse: 650 }[kind];
   const timestamps = tradingTimestamps(count);
   const close: number[] = [];
   let price = 100;
   for (let index = 0; index < count; index += 1) {
-    // Flat NAV stretches make the local 20-day volatility zero and exercise the fallback.
+    // Flat NAV stretches make the local 20-day volatility zero (the fallback path) and
+    // produce many equal analog distances (the tie order).
     const flat = kind === "flatFund" && index % 160 >= 100;
     if (!flat) price *= 1 + (next() - 0.49) * 0.04;
     close.push(Number(price.toFixed(kind === "flatFund" ? 2 : 4)));
@@ -82,22 +117,42 @@ function fixture(kind: keyof typeof GOLDEN) {
   return { records, snapshot: { latest_price: close.at(-1), annualized_volatility_20d: kind === "flatFund" ? null : 0.3 } };
 }
 
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32);
+function trend(target: any, history: ReturnType<typeof fixture>) {
+  const result = target.trendForecast(structuredClone(history));
+  if (result.optimization) delete result.optimization.generated_at;
+  return result;
 }
 
-function trendDigest(history: ReturnType<typeof fixture>): string {
-  const trend = api.trendForecast(structuredClone(history));
-  if (trend.optimization) delete trend.optimization.generated_at;
-  return digest(trend);
+function bestTime(run: () => void, attempts = 5): number {
+  run();
+  let best = Infinity;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const started = performance.now();
+    run();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
 }
 
 describe("walk-forward backtest CPU", () => {
-  it.each(Object.keys(GOLDEN) as Array<keyof typeof GOLDEN>)("keeps %s output identical to the original implementation", (kind) => {
+  it.each(KINDS)("matches the original implementation exactly for %s", (kind) => {
     const history = fixture(kind);
-    const evaluation = api.walkForwardEvaluationRows("TEST", structuredClone(history));
-    expect(evaluation.predictions.length).toBeGreaterThan(100);
-    expect({ walkForward: digest(evaluation), trend: trendDigest(history) }).toEqual(GOLDEN[kind]);
+    const actual = api.walkForwardEvaluationRows("TEST", structuredClone(history));
+    expect(actual.predictions.length).toBeGreaterThan(100);
+    // toStrictEqual compares numbers with Object.is: no tolerance, -0 and NaN included.
+    expect(actual).toStrictEqual(reference.walkForwardEvaluationRows("TEST", structuredClone(history)));
+    expect(trend(api, history)).toStrictEqual(trend(reference, history));
+  });
+
+  it("selects nearest analogs in stable-sort order, ties included", () => {
+    const next = random(17);
+    for (let round = 0; round < 200; round += 1) {
+      // Few distinct distances, so most cut-offs fall inside a run of equal values.
+      const items = Array.from({ length: 1 + Math.floor(next() * 120) }, (_, index) => ({ index, distance: Math.floor(next() * 8) / 4 }));
+      const limit = 1 + Math.floor(next() * 60);
+      const expected = [...items].sort((left, right) => left.distance - right.distance).slice(0, limit);
+      expect(api.nearestAnalogs(items, limit)).toStrictEqual(expected);
+    }
   });
 
   it("reuses analog vectors only for the same row prefix", () => {
@@ -112,22 +167,17 @@ describe("walk-forward backtest CPU", () => {
       return api.trendForecast({ snapshot: { latest_price: price, annualized_volatility_20d: Number.isFinite(std) ? std * Math.sqrt(252) : null }, records: structuredClone(past) });
     });
     expect(evaluation.predictions.map((row: Record<string, unknown>) => row.Forecast_1D_Return))
-      .toEqual(independent.map((trend: Record<string, unknown>) => trend.forecast1d));
+      .toEqual(independent.map((item: Record<string, unknown>) => item.forecast1d));
     expect(evaluation.predictions.map((row: Record<string, unknown>) => row.Forecast_1M_Return))
-      .toEqual(independent.map((trend: Record<string, unknown>) => trend.forecast1m));
+      .toEqual(independent.map((item: Record<string, unknown>) => item.forecast1m));
   });
 
-  it("stays well inside the old cost for a 1205-day history", () => {
+  it("is several times cheaper than the original on a 1205-day history", () => {
     const history = fixture("equity");
-    let best = Infinity;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const input = structuredClone(history);
-      const started = performance.now();
-      api.walkForwardEvaluationRows("TEST", input);
-      best = Math.min(best, performance.now() - started);
-    }
-    // Local Node: ~160 ms before, ~20 ms after. The ceiling only catches a regression.
-    console.info(`walk-forward 1205 rows: best ${best.toFixed(1)} ms`);
-    expect(best).toBeLessThan(100);
+    const optimised = bestTime(() => api.walkForwardEvaluationRows("TEST", structuredClone(history)));
+    const original = bestTime(() => reference.walkForwardEvaluationRows("TEST", structuredClone(history)));
+    // Same process, so the ratio does not depend on the machine. Local Node: ~160 ms vs ~20 ms.
+    console.info(`walk-forward 1205 rows: original ${original.toFixed(1)} ms, optimised ${optimised.toFixed(1)} ms`);
+    expect(optimised * 3).toBeLessThan(original);
   });
 });
