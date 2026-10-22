@@ -32,6 +32,7 @@ DEFAULT_SYMBOLS = "SPY,QQQ,NVDA"
 USER_AGENT = "orivane-forecast-freeze-trigger/1 (+GitHub Actions)"
 CONFIRMATION = timedelta(minutes=15)
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.^=-]{1,15}$")
+FETCH_ERRORS = (urllib.error.URLError, TimeoutError, ValueError, OSError)
 
 Fetch = Callable[[str], dict]
 
@@ -77,17 +78,24 @@ def http_json(url: str, timeout: float = 120) -> dict:
 def trigger_symbol(site: str, symbol: str, base: str, fetch: Fetch, stamp: str) -> dict:
     result: dict = {"symbol": symbol, "qualified": False}
     quoted = urllib.parse.quote(symbol)
+    errors = []
     try:
         # The unique parameter bypasses the 5-minute edge cache so the request reaches the Worker.
         forecast = fetch(f"{site}/api/forecast/latest?symbol={quoted}&contract={VERSION}&_trigger={stamp}").get("data") or {}
         result.update(forecast_as_of=forecast.get("data_as_of"), pending=bool(forecast.get("publication_pending")))
-        # Reading history reconciles the ledger, which settles any outcomes now due.
+    except FETCH_ERRORS as cause:
+        errors.append(f"forecast {type(cause).__name__}: {cause}")
+    # Independent of the forecast request: reading history reconciles the ledger, which
+    # settles outcomes now due and shows whether an earlier run already froze this base.
+    try:
         history = fetch(f"{site}/api/predictions/history/{quoted}?contract={VERSION}").get("data") or {}
         live = history.get("live") if isinstance(history.get("live"), dict) else history
         row = qualified_row(live.get("records") or [], base)
         result.update(qualified=row is not None, created_at=row.get("Created_At") if row else None)
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as cause:
-        result["error"] = f"{type(cause).__name__}: {cause}"[:200]
+    except FETCH_ERRORS as cause:
+        errors.append(f"history {type(cause).__name__}: {cause}")
+    if errors:
+        result["error"] = "; ".join(errors)[:300]
     return result
 
 

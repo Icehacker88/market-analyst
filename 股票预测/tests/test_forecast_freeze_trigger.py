@@ -15,13 +15,13 @@ def eligible(day: str) -> dict:
 
 
 class FakeSite:
-    def __init__(self, records: dict[str, list[dict]], failing: set[str] = frozenset()) -> None:
-        self.records, self.failing, self.urls = records, failing, []
+    def __init__(self, records: dict[str, list[dict]], failing: set[str] = frozenset(), failing_forecast: set[str] = frozenset()) -> None:
+        self.records, self.failing, self.failing_forecast, self.urls = records, failing, failing_forecast, []
 
     def __call__(self, url: str) -> dict:
         self.urls.append(url)
         symbol = url.split("symbol=")[1].split("&")[0] if "forecast/latest" in url else url.split("/history/")[1].split("?")[0]
-        if symbol in self.failing:
+        if symbol in self.failing or "forecast/latest" in url and symbol in self.failing_forecast:
             raise OSError("provider unavailable")
         if "forecast/latest" in url:
             return {"data": {"data_as_of": "2026-10-21", "publication_pending": not self.records.get(symbol)}}
@@ -72,6 +72,13 @@ class TriggerTests(unittest.TestCase):
         self.assertIn("/api/forecast/latest?symbol=SPY&contract=frozen-close-v1&_trigger=2026-10-21-", site.urls[0])
         self.assertTrue(site.urls[1].endswith("/api/predictions/history/SPY?contract=frozen-close-v1"))
         self.assertTrue(any("AAPL" in line and "skipped" in line for line in lines))
+
+    def test_a_failed_forecast_request_still_reads_history(self) -> None:
+        site = FakeSite({"SPY": [eligible("2026-10-21")]}, failing_forecast={"SPY"})
+        code, lines = run(["SPY"], "https://site", utc("2026-10-22T01:40:00Z"), site, timedelta(hours=4), pause=0)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(site.urls), 2)
+        self.assertTrue(any("| SPY | yes |" in line and "forecast OSError" in line for line in lines))
 
     def test_missing_records_fail_only_on_a_late_run(self) -> None:
         site = FakeSite({"SPY": [eligible("2026-10-21")]}, failing={"QQQ"})
