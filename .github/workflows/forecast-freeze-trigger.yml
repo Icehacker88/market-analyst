@@ -1,0 +1,46 @@
+name: Forecast Freeze Trigger
+
+# After the US close, request each reviewed US asset's forecast so the cloud freezes the
+# first qualified closed-session publication, then read its history so due outcomes settle.
+# Public GET endpoints only: no secrets, no repository writes. Outside the window it is a no-op.
+on:
+  schedule:
+    # UTC; GitHub cron can be late. EDT: 16:40 / 18:40 / 21:40 ET.
+    # EST: 15:40 (before the close: skipped) / 17:40 / 20:40 ET.
+    - cron: "40 20 * * 1-5"
+    - cron: "40 22 * * 1-5"
+    - cron: "40 1 * * 2-6"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols (default: repo variable FORECAST_FREEZE_SYMBOLS, else SPY,QQQ,NVDA)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forecast-freeze-trigger
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: 股票预测
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Trigger freeze and settlement
+        env:
+          FORECAST_FREEZE_SYMBOLS: ${{ inputs.symbols || vars.FORECAST_FREEZE_SYMBOLS || 'SPY,QQQ,NVDA' }}
+        run: python scripts/forecast_freeze_trigger.py
