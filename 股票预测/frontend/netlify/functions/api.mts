@@ -1328,7 +1328,10 @@ function rowNumber(row: HistoryRecord, key: string, fallback: number | null = nu
 }
 
 function kronosKlineForecast(rows: HistoryRecord[], returns: number[], latestPrice: number, dailyVolatility: number, volumeRatio: number): KlineForecastSignal {
-  const candles = rows.map((row, index) => {
+  // Only the latest 20 candles are read below; each needs just its own and the previous row.
+  const offset = Math.max(0, rows.length - 20);
+  const candles = rows.slice(offset).map((row, position) => {
+    const index = offset + position;
     const close = rowNumber(row, "Close", rowNumber(row, "Price", latestPrice)) || latestPrice;
     const open = rowNumber(row, "Open", index ? rowNumber(rows[index - 1], "Close", rowNumber(rows[index - 1], "Price", close)) : close) || close;
     const high = Math.max(rowNumber(row, "High", close) || close, open, close);
@@ -1412,21 +1415,51 @@ function kronosKlineForecast(rows: HistoryRecord[], returns: number[], latestPri
   };
 }
 
-function historicalAnalogForecast(rows: HistoryRecord[], dailyVolatility: number): HistoricalAnalogSignal {
+// Walk-forward calls trendForecast on growing prefixes of one row array. A feature
+// vector depends only on rows up to its own index, so it can be reused across those
+// calls unless it fell back to the caller's dailyVolatility.
+type AnalogVectorCache = { rows: HistoryRecord[]; vectors: Array<number[] | null | undefined> };
+
+function analogCacheFor(rows: HistoryRecord[], cache: AnalogVectorCache | undefined): AnalogVectorCache | undefined {
+  if (!cache || rows.length > cache.rows.length) return undefined;
+  for (let index = 0; index < rows.length; index += 1) if (rows[index] !== cache.rows[index]) return undefined;
+  return cache;
+}
+
+type AnalogNeighbour = { index: number; distance: number };
+
+// The first `limit` items of a stable sort by distance, for items given in index order.
+function nearestAnalogs(items: AnalogNeighbour[], limit: number): AnalogNeighbour[] {
+  const nearest: AnalogNeighbour[] = [];
+  for (const item of items) {
+    if (nearest.length === limit && item.distance >= nearest[limit - 1].distance) continue;
+    let position = nearest.length;
+    while (position > 0 && nearest[position - 1].distance > item.distance) position -= 1;
+    nearest.splice(position, 0, item);
+    if (nearest.length > limit) nearest.pop();
+  }
+  return nearest;
+}
+
+function historicalAnalogForecast(rows: HistoryRecord[], dailyVolatility: number, vectorCache?: AnalogVectorCache): HistoricalAnalogSignal {
   const prices = rows.map((row) => Number(row.Price));
   const dailyReturns = prices.map((price, index) => index ? price / prices[index - 1] - 1 : 0);
+  const cache = analogCacheFor(rows, vectorCache);
   const vectors = prices.map((price, index) => {
     if (index < 50 || !Number.isFinite(price) || price <= 0) return null;
+    const cached = cache?.vectors[index];
+    if (cached !== undefined) return cached;
     const ma20 = Number(rows[index].MA_20) || mean(prices.slice(index - 19, index + 1)) || price;
     const ma50 = Number(rows[index].MA_50) || mean(prices.slice(index - 49, index + 1)) || ma20;
-    const localVolatility = standardDeviation(dailyReturns.slice(Math.max(1, index - 19), index + 1)) || dailyVolatility || 0.012;
+    const ownVolatility = standardDeviation(dailyReturns.slice(Math.max(1, index - 19), index + 1));
+    const localVolatility = ownVolatility || dailyVolatility || 0.012;
     const rsiValue = Number(rows[index].RSI_14);
     const macdValue = Number(rows[index].MACD_Hist);
     const volume = Number(rows[index].Volume);
     const recentVolumes = rows.slice(Math.max(0, index - 19), index + 1).map((row) => Number(row.Volume)).filter(Number.isFinite);
     const averageVolume = mean(recentVolumes) || volume || 1;
     const scaled = (value: number, denominator: number) => clamp(value / Math.max(denominator, 0.0001), -4, 4);
-    return [
+    const vector = [
       scaled(dailyReturns[index], localVolatility),
       scaled(price / prices[index - 5] - 1, localVolatility * Math.sqrt(5)),
       scaled(price / prices[index - 20] - 1, localVolatility * Math.sqrt(20)),
@@ -1436,6 +1469,8 @@ function historicalAnalogForecast(rows: HistoryRecord[], dailyVolatility: number
       Number.isFinite(macdValue) ? scaled(macdValue / price, localVolatility) : 0,
       Number.isFinite(volume) && averageVolume > 0 ? clamp(Math.log(Math.max(0.1, volume / averageVolume)), -2, 2) : 0,
     ];
+    if (cache && ownVolatility) cache.vectors[index] = vector;
+    return vector;
   });
   const currentIndex = rows.length - 1;
   const current = vectors[currentIndex];
@@ -1451,18 +1486,35 @@ function historicalAnalogForecast(rows: HistoryRecord[], dailyVolatility: number
   const forecasts: HorizonForecasts = { d1: 0, d5: 0, d10: 0, d22: 0 };
   const upProbability: HistoricalAnalogSignal["up_probability"] = { "1D": null, "5D": null, "10D": null, "1M": null };
   let minimumSample = Infinity;
+  // Distances do not depend on the horizon: compute them once, rank once, then filter
+  // per horizon. Same order and float operations as a stable per-horizon sort.
+  const neighbours: AnalogNeighbour[] = [];
+  for (let index = 0; index < currentIndex - 1; index += 1) {
+    const vector = vectors[index];
+    if (!vector) continue;
+    let total = 0;
+    for (let featureIndex = 0; featureIndex < vector.length; featureIndex += 1) total += Math.abs(vector[featureIndex] - current[featureIndex]);
+    neighbours.push({ index, distance: total / vector.length || 0 });
+  }
+  // A horizon keeps 35 neighbours and skips at most the 21 ranked days too close to
+  // today, so the nearest 56 suffice unless a non-finite return forces a full sort.
+  let ranked = nearestAnalogs(neighbours, 56);
+  const horizonCandidates = (days: number) => {
+    const candidates: Array<{ distance: number; actualReturn: number }> = [];
+    for (const { index, distance } of ranked) {
+      if (candidates.length >= 35) break;
+      if (index + days >= currentIndex) continue;
+      const actualReturn = prices[index + days] / prices[index] - 1;
+      if (Number.isFinite(actualReturn)) candidates.push({ distance, actualReturn });
+    }
+    return candidates;
+  };
   horizons.forEach(({ label, days, key }) => {
-    const candidates = vectors
-      .slice(0, Math.max(0, currentIndex - days + 1))
-      .map((vector, index) => {
-        if (!vector || index + days >= currentIndex) return null;
-        const distance = mean(vector.map((value, featureIndex) => Math.abs(value - current[featureIndex]))) || 0;
-        const actualReturn = prices[index + days] / prices[index] - 1;
-        return Number.isFinite(actualReturn) ? { distance, actualReturn } : null;
-      })
-      .filter((item): item is { distance: number; actualReturn: number } => Boolean(item))
-      .sort((left, right) => left.distance - right.distance)
-      .slice(0, 35);
+    let candidates = horizonCandidates(days);
+    if (candidates.length < 35 && ranked.length < neighbours.length) {
+      ranked = [...neighbours].sort((left, right) => left.distance - right.distance);
+      candidates = horizonCandidates(days);
+    }
     minimumSample = Math.min(minimumSample, candidates.length);
     if (candidates.length < 12) return;
     const weighted = candidates.map((item) => ({ ...item, weight: 1 / (0.15 + item.distance) ** 2 }));
@@ -1841,7 +1893,7 @@ function historyOptimizationProfile(symbol: string, modelRows: Array<Record<stri
   };
 }
 
-function trendForecast(history: { snapshot: Record<string, number | null>; records: HistoryRecord[]; context?: ForecastContext; optimization?: ForecastOptimization }): TrendForecast {
+function trendForecast(history: { snapshot: Record<string, number | null>; records: HistoryRecord[]; context?: ForecastContext; optimization?: ForecastOptimization; analog_cache?: AnalogVectorCache }): TrendForecast {
   const rows = history.records
     .filter((row) => Number.isFinite(Number(row.Price)))
     .sort((left, right) => String(left.Date).localeCompare(String(right.Date)));
@@ -1878,7 +1930,7 @@ function trendForecast(history: { snapshot: Record<string, number | null>; recor
   const benchmark20d = typeof history.context?.benchmark_return_20d === "number" ? history.context.benchmark_return_20d : null;
   const marketDaily = clamp(((benchmark5d ?? recent5 * 5) / 5) * 0.22 + ((benchmark20d ?? recent20 * 20) / 20) * 0.1, -0.18 * volatilityScale, 0.18 * volatilityScale);
   const klineForecast = kronosKlineForecast(rows, returns, latestPrice, dailyVolatility, volumeRatio);
-  const analogForecast = historicalAnalogForecast(rows, dailyVolatility);
+  const analogForecast = historicalAnalogForecast(rows, dailyVolatility, history.analog_cache);
 
   const momentumDaily = recent5 * 0.46 + recent10 * 0.28 + recent20 * 0.18 + recent60 * 0.08;
   const trendSlope = (latestPrice / ma20 - 1) / 9 + (ma20 / ma50 - 1) / 18;
@@ -4923,6 +4975,7 @@ function walkForwardEvaluationRows(
   const predictions: Array<Record<string, unknown>> = [];
   const models: Array<Record<string, unknown>> = [];
   const firstIndex = Math.max(60, rows.length - sampleLimit - 1);
+  const analogCache: AnalogVectorCache = { rows, vectors: [] };
   for (let index = firstIndex; index < rows.length - 1; index += 1) {
     const past = rows.slice(0, index + 1);
     const current = rows[index];
@@ -4936,6 +4989,7 @@ function walkForwardEvaluationRows(
           annualized_volatility_20d: Number.isFinite(rollingStd) ? rollingStd * Math.sqrt(252) : null,
         },
         records: past,
+        analog_cache: analogCache,
       });
       const row = attachBacktestOutcomes({
         Created_At: new Date(`${String(current.Date)}T00:00:00Z`).toISOString(),
