@@ -1,4 +1,5 @@
-import { currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { BASE_PRICE_REVISION_RTOL, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { fillClosedSessionBar, type YahooChartMeta } from "./_shared/yahoo-chart";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
@@ -2204,12 +2205,13 @@ async function yahooHistory(symbol: string, start: string): Promise<Record<strin
   const response = await fetch(url, { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Yahoo Finance returned ${response.status}.`);
   const payload = await response.json() as {
-    chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<Record<string, Array<number | null>>>; adjclose?: Array<{ adjclose?: Array<number | null> }> } }> };
+    chart?: { result?: Array<{ meta?: YahooChartMeta; timestamp?: number[]; indicators?: { quote?: Array<Record<string, Array<number | null>>>; adjclose?: Array<{ adjclose?: Array<number | null> }> } }> };
   };
   const result = payload.chart?.result?.[0];
   if (!result?.timestamp?.length || !result.indicators?.quote?.[0]) throw new Error("No market history is available.");
   const sourceObservedAt = new Date().toISOString();
-  const records = technicalRecords(result.timestamp, result.indicators.quote[0], result.indicators.adjclose?.[0]?.adjclose || []);
+  const filled = fillClosedSessionBar(result.timestamp, result.indicators.quote[0], result.indicators.adjclose?.[0]?.adjclose || [], result.meta);
+  const records = technicalRecords(result.timestamp, filled.quote, filled.adjusted);
   if (!records.length) throw new Error("No market history is available.");
   const prices = records.map((row) => Number(row.Price));
   const returns = records.map((row) => Number(row.Daily_Return)).slice(-20);
@@ -4577,7 +4579,7 @@ function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number
     else if (!target) reason = "target_data_missing";
     else if (!Number.isFinite(observed) || observed < equitySession(targetDate)!.close + 900000 || observed > now) reason = "target_data_unconfirmed";
     else if (provenance.source !== snapshot.source || provenance.price_basis !== snapshot.price_basis) reason = "price_provenance_mismatch";
-    else if (!Number.isFinite(currentPrice) || Math.abs(currentPrice - Number(snapshot.base_price)) > Math.max(1e-8, Math.abs(currentPrice) * 1e-10)) reason = "base_price_revised";
+    else if (!Number.isFinite(currentPrice) || Math.abs(currentPrice - Number(snapshot.base_price)) > Math.max(1e-8, Math.abs(currentPrice) * BASE_PRICE_REVISION_RTOL)) reason = "base_price_revised";
     else {
       const actualPrice = toNumber(target[snapshot.price_basis!]), forecast = toNumber(row[forecastField(horizon.label)]);
       if (actualPrice === null || actualPrice <= 0 || forecast === null) reason = "target_price_invalid";

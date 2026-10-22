@@ -96,6 +96,18 @@ describe("frozen forecast timing contract", () => {
       expect(bad.data.Actual_1D_Return).toBeUndefined(); expect(bad.data.Settlement_Status["1D"]).toBe(reason);
     }
   });
+  it("tolerates float noise and cent-level finalization of the base close, but still flags revisions", async () => {
+    // Base frozen at 100 (for example Yahoo's after-close meta price); settlement re-reads the finalized bar.
+    for (const [base, reason] of [[100.0000149, "settled"], [100.009, "settled"], [99.991, "settled"], [100.02, "base_price_revised"], [50, "base_price_revised"]] as const) {
+      const { data } = await call("settle", { row: row(), future, provenance, now, base });
+      expect(data.Settlement_Status["1D"], String(base)).toBe(reason);
+      if (reason === "settled") {
+        expect(data.Actual_1D_Return).toBeCloseTo(.1); // still measured from the frozen base, not the re-read one
+        expect(data.Outcome_Evidence["1D"].base_price).toBe(100);
+        expect(outcomeEligible(data, "1D", now)).toBe(true);
+      }
+    }
+  });
   it("freezes and settles on the unadjusted Close so ex-dividend Adj Close rewrites cannot strand a record", async () => {
     const snapshot = makeEvaluationSnapshot({ symbol: "SPY" }, { Date: "2026-09-02", Price: 98.5, "Adj Close": 98.5, Close: 100 }, "yahoo", "2026-09-02T20:30:00Z", "2026-09-02T21:00:00Z");
     expect([snapshot.price_basis, snapshot.base_price]).toEqual(["Close", 100]);

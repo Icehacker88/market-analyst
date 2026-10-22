@@ -2,6 +2,10 @@ import calendar from "../../../../contracts/us-equity-calendar.json";
 
 export const EQUITY_CALENDAR_VERSION = calendar.version;
 export const TIMING_PROTOCOL = "frozen-close-v1";
+// Settlement's check that the frozen base close was not revised. 0.01% absorbs float32
+// storage noise and the cent-level gap between Yahoo's after-close meta price (used to
+// freeze) and the later finalized bar; splits and real corrections are far larger.
+export const BASE_PRICE_REVISION_RTOL = 1e-4;
 export const HORIZON_DAYS: Record<string, number> = { "1D": 1, "5D": 5, "10D": 10, "1M": 22 };
 // Live freeze/settlement basis. Adj Close rewrites every past day at each ex-dividend date,
 // so a frozen Adj Close base would never match again; Close only changes on splits.

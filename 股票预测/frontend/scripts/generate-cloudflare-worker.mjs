@@ -94,6 +94,7 @@ let source = await readFile(sourcePath, "utf8");
 const replacements = [
   ['from "./_shared/forecast-eligibility"', 'from "../../netlify/functions/_shared/forecast-eligibility"'],
   ['from "./_shared/password"', 'from "../../netlify/functions/_shared/password"'],
+  ['from "./_shared/yahoo-chart"', 'from "../../netlify/functions/_shared/yahoo-chart"'],
   ['import type { Config, Context } from "@netlify/functions";\n', ""],
   ['import { getDeployStore, getStore } from "@netlify/blobs";\n', ""],
   ['import publicData from "./data/public-data.json" with { type: "json" };', 'import publicData from "../../netlify/functions/data/public-data.json" with { type: "json" };'],
