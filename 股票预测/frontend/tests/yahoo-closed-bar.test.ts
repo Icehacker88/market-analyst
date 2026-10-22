@@ -37,6 +37,21 @@ describe("Yahoo closed-session bar", () => {
     expect(result.adjusted).toBe(a);
   });
 
+  it("fills a missing close but keeps a published adjclose and the price series built from it", () => {
+    const filled = fillClosedSessionBar(timestamps, quote(), [769.0499877929688, 770.5], afterClose);
+    expect(filled.quote.close[1]).toBe(773.09);
+    expect(filled.adjusted).toEqual([769.0499877929688, 770.5]);
+  });
+
+  it("does not treat an earlier session's end as this bar's close", () => {
+    // Stale/mixed meta: regular period is 10-20, while the 10-21 quote is still intraday.
+    const previous = { start: regular.start - 86400, end: regular.end - 86400 };
+    const stale = { ...afterClose, regularMarketTime: 1792600000, currentTradingPeriod: { regular: previous } };
+    expect(fillClosedSessionBar(timestamps, quote(), adjusted(), stale).quote.close[1]).toBeNull();
+    // Even with a quote at 16:00 the period still does not belong to this bar.
+    expect(fillClosedSessionBar(timestamps, quote(), adjusted(), { ...stale, regularMarketTime: 1792612800 }).quote.close[1]).toBeNull();
+  });
+
   it("never overwrites a close Yahoo already published", () => {
     const q = { ...quote(), close: [769.0499877929688, 773.0900268554688] };
     expect(fillClosedSessionBar(timestamps, q, adjusted(), afterClose).quote).toBe(q);
