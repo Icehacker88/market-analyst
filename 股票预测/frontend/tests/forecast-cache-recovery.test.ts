@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import ts from "typescript";
-import { currentPublicationWindow, makeEvaluationSnapshot, qualifyForecast } from "../netlify/functions/_shared/forecast-eligibility";
+import { CLOUD_FORECAST_POLICY_VERSION, currentPublicationWindow, makeEvaluationSnapshot, qualifyForecast } from "../netlify/functions/_shared/forecast-eligibility";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 let worker: Miniflare;
@@ -14,8 +14,8 @@ function history(day = "2026-10-20", observed = postClose) {
   return { symbol: "SPY", data_as_of: day, data_source: "yahoo", source_observed_at: observed,
     snapshot: { latest_price: 100 }, records: [{ Date: day, Price: 100, Close: 100, "Adj Close": 100 }] };
 }
-function forecast(generated = "2026-10-20T19:59:00Z", day = "2026-10-20") {
-  return { symbol: "SPY", data_as_of: day, generated_at: generated, forecast_1d_return: .01,
+function forecast(generated = "2026-10-20T19:59:00Z", day = "2026-10-20", policy_version: string | undefined = CLOUD_FORECAST_POLICY_VERSION) {
+  return { symbol: "SPY", data_as_of: day, generated_at: generated, forecast_1d_return: .01, policy_version,
     evaluation_snapshot: makeEvaluationSnapshot({ symbol: "SPY" }, history(day).records[0], "yahoo", generated, generated) };
 }
 // Enough walk-forward, calibration and live evidence to pass the action gate.
@@ -51,7 +51,7 @@ beforeAll(async () => {
         body = original.slice(0, original.indexOf(marker)) + `
           if(testInput.finishAt) testNow=Date.parse(testInput.finishAt);
           const generated_at=new Date().toISOString();
-          return {symbol:asset.symbol,data_as_of:history.data_as_of,generated_at,forecast_1d_return:.02,
+          return {symbol:asset.symbol,data_as_of:history.data_as_of,generated_at,forecast_1d_return:.02,policy_version:CLOUD_FORECAST_POLICY_VERSION,
             evaluation_snapshot:makeEvaluationSnapshot(asset,history.records.at(-1),history.data_source,history.source_observed_at,generated_at)};
         }`;
       }
@@ -188,6 +188,23 @@ describe("closed-session cache recovery", () => {
     expect(result.second.generated_at).toBe(result.data.generated_at);
     expect(result.rows).toHaveLength(2);
     expect(qualifyForecast(result.rows[1],"1D",Date.parse(postClose)).status).toBe("eligible");
+  });
+  it.each([["another policy version", "cloud-forecast-policy-v0"], ["no policy version (legacy)", undefined]])("regenerates instead of relabeling a cache from %s", async (_label, version) => {
+    const cached: Record<string, any> = forecast(postClose, "2026-10-20", "placeholder");
+    if (version) cached.policy_version = version; else delete cached.policy_version;
+    const result = await run({ cached, rows: [ledgerRow(cached as ReturnType<typeof forecast>)] });
+    expect(result.failure).toBeUndefined();
+    expect(result.providerCalls).toBe(0); // the shared history cache was already ready; only the forecast is regenerated
+    expect(result.data.generated_at).not.toBe(cached.generated_at);
+    expect(result.data.policy_version).toBe(CLOUD_FORECAST_POLICY_VERSION);
+    expect(result.writes.find((w: any) => w.key.startsWith("publications/")).value.policy_version).toBe(CLOUD_FORECAST_POLICY_VERSION);
+  });
+  it("serves an older-version fallback as pending Observe without relabeling it", async () => {
+    const cached = actionable(forecast("2026-10-19T21:00:00Z", "2026-10-19", "cloud-forecast-policy-v0"));
+    const result = await run({ operation: "serve", cached, rows: [ledgerRow(cached)], cachedHistory: history("2026-10-19"), freshHistory: history("2026-10-19") });
+    expect(result.data.publication_pending).toBe(true);
+    expect(result.data.policy_version).toBe("cloud-forecast-policy-v0");
+    expect(result.data.action.actionable).toBe(false);
   });
   it("keeps timely cache inputs reusable without inventing an acknowledgement or forcing provider IO", async () => {
     const cached=forecast(postClose);

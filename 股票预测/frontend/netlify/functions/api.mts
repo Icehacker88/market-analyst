@@ -1,4 +1,4 @@
-import { BASE_PRICE_REVISION_RTOL, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { BASE_PRICE_REVISION_RTOL, CLOUD_FORECAST_POLICY_VERSION, isCurrentPolicy, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import { fillClosedSessionBar, type YahooChartMeta } from "./_shared/yahoo-chart";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
@@ -4656,9 +4656,15 @@ function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number
   return updated;
 }
 
+// Live evidence: a time-qualified, settled outcome generated under the current policy version.
+// Other-version and legacy records stay visible but never count toward the current evidence.
+function scoredOutcome(row: Record<string, unknown>, horizon: string): boolean {
+  return outcomeEligible(row, horizon) && isCurrentPolicy(row);
+}
+
 function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: string, window: number | null, backtest = false): Record<string, unknown> {
   const completedAll = [...ordered]
-    .filter((row) => (backtest || outcomeEligible(row, horizon)) && toNumber(row[actualField(horizon)]) !== null && toNumber(row[correctField(horizon)]) !== null)
+    .filter((row) => (backtest || scoredOutcome(row, horizon)) && toNumber(row[actualField(horizon)]) !== null && toNumber(row[correctField(horizon)]) !== null)
     .sort((left, right) => String(left.As_Of_Date).localeCompare(String(right.As_Of_Date)));
   const completed = window === null ? completedAll : completedAll.slice(-window);
   const actualDirections = completed.map((row) => String(row[directionField(horizon)])).filter((value) => value === "Up" || value === "Down");
@@ -4673,7 +4679,9 @@ function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: str
     eligible: backtest ? ordered.length : ordered.filter((row) => qualifyForecast(row, horizon).status === "eligible").length,
     ineligible: backtest ? 0 : ordered.filter((row) => qualifyForecast(row, horizon).status === "ineligible").length,
     unknown: backtest ? 0 : ordered.filter((row) => qualifyForecast(row, horizon).status === "unknown").length,
-    excluded: backtest ? 0 : ordered.filter((row) => toNumber(row[actualField(horizon)]) !== null && !outcomeEligible(row, horizon)).length,
+    excluded: backtest ? 0 : ordered.filter((row) => toNumber(row[actualField(horizon)]) !== null && !scoredOutcome(row, horizon)).length,
+    policy_version: backtest ? null : CLOUD_FORECAST_POLICY_VERSION,
+    other_policy: backtest ? 0 : ordered.filter((row) => outcomeEligible(row, horizon) && !isCurrentPolicy(row)).length,
     horizon,
     window: window === null ? "All" : String(window),
     completed: completed.length,
@@ -4754,6 +4762,8 @@ async function recordCloudForecast(symbol: string, forecast: Record<string, unkn
     As_Of_Date: asOfDate,
     Ticker: ticker,
     Best_Model: String(forecast.best_model || "Cloud Trend"),
+    // Copied from the forecast as generated; never stamped at write time.
+    Policy_Version: typeof forecast.policy_version === "string" ? forecast.policy_version : null,
     Raw_Direction: String(forecast.forecast_1d_direction || directionFromReturn(Number(forecast.forecast_1d_return || 0))),
     Action_Signal: String(forecast.signal || "Observe"),
     Signal_Quality: String(forecast.signal_quality || "Low"),
@@ -4893,7 +4903,7 @@ async function settleForecastSymbols(symbols: string[]): Promise<Record<string, 
 function buildLedgerHistory(symbol: string, records: Array<Record<string, unknown>>, backtest = false): Record<string, unknown> {
   const ordered = [...records].sort((left, right) => String(right.As_Of_Date).localeCompare(String(left.As_Of_Date)));
   const completedAll = [...ordered]
-    .filter((row) => (backtest || outcomeEligible(row, "1D")) && toNumber(row.Actual_1D_Return) !== null && toNumber(row.Raw_Direction_Correct) !== null)
+    .filter((row) => (backtest || scoredOutcome(row, "1D")) && toNumber(row.Actual_1D_Return) !== null && toNumber(row.Raw_Direction_Correct) !== null)
     .sort((left, right) => String(left.As_Of_Date).localeCompare(String(right.As_Of_Date)));
   const statistics = [20, 60, 120, null].map((window) => horizonStatistics(ordered, "1D", window, backtest));
   const horizonStatisticsRows = EVALUATION_HORIZONS.flatMap((horizon) => [20, 60, 120, null].map((window) => horizonStatistics(ordered, horizon.label, window, backtest)));
@@ -4910,7 +4920,7 @@ function buildLedgerHistory(symbol: string, records: Array<Record<string, unknow
   });
   return {
     symbol,
-    notice: backtest ? "Walk-forward backtest, not live publication evidence." : "Accuracy counts time-qualified frozen outcomes only; legacy/unknown records remain visible but unscored.",
+    notice: backtest ? "Walk-forward backtest, not live publication evidence." : "Accuracy counts time-qualified frozen outcomes generated under the current forecast policy version only; other-version, legacy and unknown records remain visible but unscored.",
     evaluation_protocol: backtest ? "walk-forward" : TIMING_PROTOCOL,
     statistics,
     horizon_statistics: horizonStatisticsRows,
@@ -4918,10 +4928,11 @@ function buildLedgerHistory(symbol: string, records: Array<Record<string, unknow
       ...row,
       Time_Eligibility: backtest ? null : Object.fromEntries(EVALUATION_HORIZONS.map((h) => [h.label, qualifyForecast(row, h.label)])),
       Outcome_Observed: Object.fromEntries(EVALUATION_HORIZONS.map((h) => [h.label, toNumber(row[actualField(h.label)]) !== null])),
-      Verified: (backtest || outcomeEligible(row, "1D")) && toNumber(row.Actual_1D_Return) !== null,
-      Verified_5D: (backtest || outcomeEligible(row, "5D")) && toNumber(row.Actual_5D_Return) !== null,
-      Verified_10D: (backtest || outcomeEligible(row, "10D")) && toNumber(row.Actual_10D_Return) !== null,
-      Verified_1M: (backtest || outcomeEligible(row, "1M")) && toNumber(row.Actual_1M_Return) !== null,
+      Policy_Current: backtest ? null : isCurrentPolicy(row),
+      Verified: (backtest || scoredOutcome(row, "1D")) && toNumber(row.Actual_1D_Return) !== null,
+      Verified_5D: (backtest || scoredOutcome(row, "5D")) && toNumber(row.Actual_5D_Return) !== null,
+      Verified_10D: (backtest || scoredOutcome(row, "10D")) && toNumber(row.Actual_10D_Return) !== null,
+      Verified_1M: (backtest || scoredOutcome(row, "1M")) && toNumber(row.Actual_1M_Return) !== null,
     })),
     charts: { rolling_accuracy: rolling, scatter: [], timeline: [], errors: [] },
   };
@@ -5397,7 +5408,9 @@ async function servingCloudForecast(symbol: string, optimize = false): Promise<R
 
 async function readFrozenCloudForecast(symbol: string, expectedDataAsOf?: string | null): Promise<Record<string, unknown> | null> {
   const cached = await newestCachedForecast(symbol);
-  if (!cached) return null;
+  // A cache from another (or no) policy version is stale: regenerate rather than relabel it,
+  // so old-version validation never stands in for the current policy.
+  if (!cached || cached.policy_version !== CLOUD_FORECAST_POLICY_VERSION) return null;
   const window = forecastUsesEquityCalendar(symbol, cached) ? currentPublicationWindow() : null;
   if (window) {
     if (cached.data_as_of !== window.base_session || !forecastReadyToPublish(symbol, cached)) return null;
@@ -5631,6 +5644,7 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
     kline_forecast: trend.klineForecast,
     risk: null,
     generated_at: generatedAt,
+    policy_version: CLOUD_FORECAST_POLICY_VERSION,
     evaluation_snapshot: evaluationSnapshot,
     data_as_of: history.data_as_of,
     validation_sample_size: backtestSamples,

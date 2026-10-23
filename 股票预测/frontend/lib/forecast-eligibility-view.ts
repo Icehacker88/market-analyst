@@ -31,6 +31,7 @@ const REASONS: Record<string, [string, string]> = {
   target_price_invalid: ["目标价格无效", "Target price is invalid"],
   outcome_evidence_missing: ["缺少结算证据", "Settlement evidence is missing"],
   protocol_unconfirmed: ["统计口径未确认（可能是旧版缓存）", "Scoring protocol unconfirmed (possibly an old cached response)"],
+  policy_version_other: ["非当前预测政策版本，不计入当前证据", "Generated under another forecast policy version; not counted as current evidence"],
 };
 
 type Qualification = { status?: string; reason?: string };
@@ -53,6 +54,8 @@ export function recordState(row: LedgerRecord, horizon: string): RecordState {
   const status = qualification(row, horizon)?.status;
   // Old responses used Verified=true for "has an outcome"; without the contract nothing counts.
   if (!status) return observed ? "excluded" : "unconfirmed";
+  // Timing may qualify, but only the current policy version's outcomes are evidence.
+  if (status === "eligible" && row.Policy_Current === false) return "excluded";
   if (status === "eligible" && row[VERIFIED_FIELD[horizon] || "Verified"] === true) return "counted";
   if (observed || status === "ineligible") return "excluded";
   return status === "eligible" ? "awaiting" : "unconfirmed";
@@ -67,6 +70,7 @@ export function stateReasonCode(row: LedgerRecord, horizon: string): string | nu
   }
   const timing = qualification(row, horizon);
   if (!timing) return "protocol_unconfirmed";
+  if (timing.status === "eligible" && row.Policy_Current === false) return "policy_version_other";
   if (timing.status === "eligible") {
     // Timing passed but the outcome lacks frozen settlement evidence.
     const settlement = objectField(row, "Settlement_Status")?.[horizon];

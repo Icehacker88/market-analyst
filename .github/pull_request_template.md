@@ -24,6 +24,7 @@ Reviewer agent: <!-- the agent that did not author this PR -->
 ## Impact
 
 - Data / prediction ledger:
+- Forecast policy version: <!-- bumped (old → new) / unchanged: no forecast-affecting change / exempt: output-identical, equivalence test named -->
 - Deployment: <!-- none / Preview or Production, and who authorized it -->
 - Production configuration or secrets touched: <!-- should be "none" unless the user approved -->
 - Rollback:

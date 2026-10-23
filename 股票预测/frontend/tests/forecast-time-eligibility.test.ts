@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pendingRecords from "../../contracts/pending-forecast-regressions.json";
 import lateRecords from "../../contracts/late-forecast-regressions.json";
-import { equitySession, followingSessions, makeEvaluationSnapshot, qualifyForecast, outcomeEligible } from "../netlify/functions/_shared/forecast-eligibility";
+import { CLOUD_FORECAST_POLICY_VERSION, equitySession, followingSessions, makeEvaluationSnapshot, qualifyForecast, outcomeEligible } from "../netlify/functions/_shared/forecast-eligibility";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const now = Date.parse("2026-10-19T00:00:00Z");
 function row() {
@@ -133,7 +133,7 @@ describe("frozen forecast timing contract", () => {
   });
   it("appends the first eligible same-day publication without overwriting intraday or legacy evidence", async () => {
     const forecast = { symbol: "SPY", data_as_of: row().As_Of_Date, generated_at: row().Created_At,
-      evaluation_snapshot: row().Evaluation_Snapshot, forecast_1d_return: .02 };
+      evaluation_snapshot: row().Evaluation_Snapshot, forecast_1d_return: .02, policy_version: CLOUD_FORECAST_POLICY_VERSION };
     const intraday = { ...row(), Created_At: "2026-09-02T18:00:00Z", Evaluation_Snapshot: null,
       Actual_1D_Return: .1, Raw_Direction_Correct: 1, Publication_ID: "old" };
     for (const existing of [intraday, { ...intraday, Created_At: row().Created_At }]) {
@@ -144,6 +144,7 @@ describe("frozen forecast timing contract", () => {
       expect(records).toHaveLength(2);
       expect(records[0]).toEqual(original);
       expect(qualifyForecast(records[1]).status).toBe("eligible");
+      expect(records[1].Policy_Version).toBe(CLOUD_FORECAST_POLICY_VERSION);
       for (const horizon of ["1D", "5D", "10D", "1M"]) expect(qualifyForecast(records[1], horizon).status).toBe("eligible");
       // A retry or a later, different forecast cannot replace the accepted publication.
       for (const generated_at of [row().Created_At, "2026-09-03T12:00:00Z"]) {
@@ -162,6 +163,28 @@ describe("frozen forecast timing contract", () => {
       expect((await call("record", { rows: [original, settled], forecast,
         frozenAt: row().Created_At, publicationId: "after-settlement" })).writes).toEqual([]);
     }
+  });
+  it("counts only settled outcomes generated under the current policy version", async () => {
+    const settled = (await call("settle", { row: { ...row(), Policy_Version: CLOUD_FORECAST_POLICY_VERSION }, future, provenance, now })).data;
+    expect(outcomeEligible(settled, "1D", now)).toBe(true);
+    const older = { ...settled, Policy_Version: "cloud-forecast-policy-v0" };
+    const legacy = { ...settled };
+    delete legacy.Policy_Version;
+    const history = (await call("history", { rows: [settled, older, legacy] })).data;
+    expect(history.statistics[0]).toMatchObject({ completed: 1, eligible: 3, excluded: 2, other_policy: 2, policy_version: CLOUD_FORECAST_POLICY_VERSION });
+    expect(history.records.map((r: any) => [r.Policy_Current, r.Verified])).toEqual([[true, true], [false, false], [false, false]]);
+    expect(history.charts.rolling_accuracy).toHaveLength(1);
+    // Other-version evidence never unlocks the current policy, however much of it exists.
+    const governance = (await call("governance", { rows: Array(30).fill(older) })).data;
+    expect(governance.live_samples_all).toBe(0);
+    expect(governance.active_model).toBe("Orivane Ensemble Safe Mode");
+  });
+  it("copies the generation-time policy version into the ledger and never stamps one at write time", async () => {
+    const base = { symbol: "SPY", data_as_of: row().As_Of_Date, generated_at: row().Created_At, evaluation_snapshot: row().Evaluation_Snapshot, forecast_1d_return: .02 };
+    const unversioned = await call("record", { rows: [], forecast: base, frozenAt: row().Created_At, publicationId: "p1" });
+    expect(unversioned.writes[0].value[0].Policy_Version).toBeNull();
+    const older = await call("record", { rows: [], forecast: { ...base, policy_version: "cloud-forecast-policy-v0" }, frozenAt: row().Created_At, publicationId: "p2" });
+    expect(older.writes[0].value[0].Policy_Version).toBe("cloud-forecast-policy-v0");
   });
   it("does not grow the ledger for repeated unqualified or unknown same-day publications", async () => {
     for (const snapshot of [null, row().Evaluation_Snapshot]) {

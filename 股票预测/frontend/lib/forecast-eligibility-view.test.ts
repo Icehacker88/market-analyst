@@ -5,6 +5,16 @@ import type { Forecast } from "./types";
 const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1" }, "5D": { status, reason, protocol: "frozen-close-v1" } });
 
 describe("frozen forecast eligibility view", () => {
+  it("marks a timing-qualified record from another policy version as not counted, with its reason", () => {
+    const other = { Verified: false, Actual_1D_Return: 0.01, Time_Eligibility: timing("eligible", "qualified"), Outcome_Observed: { "1D": true }, Policy_Current: false };
+    expect(recordState(other, "1D")).toBe("excluded");
+    expect(reasonLabel(stateReasonCode(other, "1D"), true)).toBe("非当前预测政策版本，不计入当前证据");
+    const pendingOther = { ...other, Actual_1D_Return: undefined, Outcome_Observed: { "1D": false } };
+    expect(recordState(pendingOther, "1D")).toBe("excluded");
+    // Current-version records keep the existing states.
+    expect(recordState({ ...other, Policy_Current: true, Verified: true }, "1D")).toBe("counted");
+  });
+
   it("shows one change-log entry per base date, preferring the eligible same-day row", () => {
     const intraday = { As_Of_Date: "2026-10-20", Publication_ID: "intraday", Time_Eligibility: timing("ineligible", "base_session_unclosed") };
     const closed = { As_Of_Date: "2026-10-20", Publication_ID: "closed", Time_Eligibility: timing("eligible", "qualified") };

@@ -2,6 +2,15 @@ import calendar from "../../../../contracts/us-equity-calendar.json";
 
 export const EQUITY_CALENDAR_VERSION = calendar.version;
 export const TIMING_PROTOCOL = "frozen-close-v1";
+// The whole adaptive cloud forecast policy (Safe Mode ensemble, Router, daily reweighting,
+// candidates, overlays, features, data basis, outputs) — not one candidate model. Bump it in
+// any PR that changes forecast outputs, candidates, selection/routing, features, data basis or
+// gate configuration; output-identical optimizations with an equivalence test are exempt.
+// Live evidence counts only records generated under the current version.
+export const CLOUD_FORECAST_POLICY_VERSION = "cloud-forecast-policy-v1";
+export function isCurrentPolicy(row: Row): boolean {
+  return row.Policy_Version === CLOUD_FORECAST_POLICY_VERSION;
+}
 // Settlement's check that the frozen base close was not revised. 0.01% absorbs float32
 // storage noise and the cent-level gap between Yahoo's after-close meta price (used to
 // freeze) and the later finalized bar; splits and real corrections are far larger.
