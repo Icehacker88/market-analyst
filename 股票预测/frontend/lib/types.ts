@@ -123,8 +123,24 @@ export type ForecastGovernance = {
   direction_edge_all: number | null;
   drift_score: number;
   rollback_count: number;
+  evidence_gate?: EvidenceGate | null;
   reason_zh: string;
   reason_en: string;
+};
+
+// Per asset, current forecast policy version: ≥ required qualified 1D outcomes and the Wilson
+// 95% lower bound above the same batch's majority baseline.
+export type EvidenceGate = {
+  rule: string;
+  policy_version: string;
+  status: "insufficient" | "not_met" | "met";
+  samples: number;
+  required: number;
+  hits: number;
+  direction_accuracy: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  majority_baseline_accuracy: number | null;
 };
 
 export type ForecastScoreAsset = {
@@ -646,6 +662,10 @@ export type LedgerStat = {
   median_absolute_return_error?: number | null;
   hit_count: number;
   miss_count: number;
+  direction_accuracy_ci_low?: number | null;
+  direction_accuracy_ci_high?: number | null;
+  policy_version?: string | null;
+  other_policy?: number;
 };
 
 export type PredictionHistory = {

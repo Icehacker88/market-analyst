@@ -1,10 +1,11 @@
-import type { Forecast, LedgerRecord, LedgerStat } from "./types";
+import type { EvidenceGate, Forecast, LedgerRecord, LedgerStat } from "./types";
 
 // Display helpers for the frozen-close-v1 timing contract (see docs/forecast-time-phase1-2026-10-19.md).
 // Only "counted" records feed live accuracy; every other record stays visible with its reason.
 export type RecordState = "counted" | "excluded" | "awaiting" | "unconfirmed";
 
-export const QUALIFIED_SAMPLE_GOAL = 20;
+// Per-asset evidence gate (user-confirmed 2026-10-24): current policy version only.
+export const QUALIFIED_SAMPLE_GOAL = 60;
 export const SUPPORTED_PROTOCOL = "frozen-close-v1";
 
 const VERIFIED_FIELD: Record<string, string> = { "1D": "Verified", "5D": "Verified_5D", "10D": "Verified_10D", "1M": "Verified_1M" };
@@ -94,6 +95,27 @@ export function onePerBaseDate(records: LedgerRecord[]): { row: LedgerRecord; ot
     const chosen = Math.max(0, rows.findIndex((row) => qualification(row, "1D")?.status === "eligible"));
     return { row: rows[chosen], others: rows.filter((_, index) => index !== chosen) };
   });
+}
+
+// "58.0%（95% 区间 41.2–73.6%）"; just the point estimate when no interval is known.
+export function accuracyWithInterval(stat: Pick<LedgerStat, "direction_accuracy" | "direction_accuracy_ci_low" | "direction_accuracy_ci_high"> | undefined, zh: boolean): string {
+  const value = stat?.direction_accuracy;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const low = stat?.direction_accuracy_ci_low, high = stat?.direction_accuracy_ci_high;
+  const point = `${value.toFixed(1)}%`;
+  if (typeof low !== "number" || typeof high !== "number") return point;
+  return zh ? `${point}（95% 区间 ${low.toFixed(1)}–${high.toFixed(1)}%）` : `${point} (95% interval ${low.toFixed(1)}–${high.toFixed(1)}%)`;
+}
+
+// Gates are judged per asset; a cross-asset total never stands in for one asset's evidence.
+export function gateSummary(gates: Array<{ symbol: string; gate?: EvidenceGate | null }>): { known: boolean; allMet: boolean; anyNotMet: boolean; progress: string } {
+  const known = gates.length > 0 && gates.every((item) => item.gate);
+  return {
+    known,
+    allMet: known && gates.every((item) => item.gate!.status === "met"),
+    anyNotMet: gates.some((item) => item.gate?.status === "not_met"),
+    progress: gates.map((item) => `${item.symbol} ${item.gate ? Math.min(item.gate.samples, item.gate.required) : 0}/${item.gate?.required ?? QUALIFIED_SAMPLE_GOAL}`).join(" · "),
+  };
 }
 
 export function isCounted(row: LedgerRecord, horizon: string): boolean {

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { getForecastScoreboard } from "@/lib/api";
 import { trackEvent } from "@/lib/analytics";
 import { forecastTrend, type ForecastTrend } from "@/lib/forecast-trend";
-import { edgeClass, eligibilityCounts, QUALIFIED_SAMPLE_GOAL, qualifiedStats, reasonBreakdown, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
+import { accuracyWithInterval, edgeClass, eligibilityCounts, gateSummary, QUALIFIED_SAMPLE_GOAL, qualifiedStats, reasonBreakdown, reasonLabel, recordState, stateLabel, stateReasonCode } from "@/lib/forecast-eligibility-view";
 import { formatMetricPercent } from "@/lib/format";
 import { localizeModel } from "@/lib/i18n";
 import type { ForecastScoreAsset, ForecastScoreboard, LedgerRecord, LedgerStat } from "@/lib/types";
@@ -57,22 +57,22 @@ export function ForecastTrackRecord() {
   const backtestEdge = Number(backtest?.direction_edge);
   const liveEdge = typeof live?.direction_edge === "number" && Number.isFinite(live.direction_edge) ? live.direction_edge : null;
   const liveSamples = live?.completed ?? 0;
-  const liveEnough = liveKnown && liveSamples >= QUALIFIED_SAMPLE_GOAL;
   const liveCounts = eligibilityCounts(live);
   const backtestTrend = forecastTrend(data.backtest.statistics);
   const liveTrend = forecastTrend(liveStats);
-  // "building" only means too few qualified samples; enough samples without positive edge is a verdict.
-  const overallState = backtestEdge > 0 && liveEnough && liveEdge !== null && liveEdge > 0
+  // Judged per asset from each governance evidence gate, never from the cross-asset total.
+  const gates = gateSummary(data.per_asset.map((asset) => ({ symbol: asset.symbol, gate: asset.governance?.evidence_gate })));
+  const overallState = backtestEdge > 0 && gates.allMet
     ? "validated"
-    : (Number.isFinite(backtestEdge) && backtestEdge <= 0) || (liveEnough && liveEdge !== null && liveEdge <= 0)
+    : (Number.isFinite(backtestEdge) && backtestEdge <= 0) || gates.anyNotMet
       ? "below_baseline"
-      : !liveKnown || liveEnough
+      : !liveKnown || !gates.known
         ? "unconfirmed"
         : "building";
   const stateCopy = overallState === "validated"
     ? {
-      title: zh ? "当前模型已通过基础验证门槛" : "Current model passes the base validation gates",
-      body: zh ? "回测与真实冻结样本均显示正基准优势；仍需结合各资产和各周期明细使用。" : "Both backtest and frozen live samples show positive benchmark edge; use asset and horizon detail as well.",
+      title: zh ? "各核心资产均已达到既定证据门槛" : "Every core asset meets the evidence gate",
+      body: zh ? `每个资产当前预测政策版本至少 ${QUALIFIED_SAMPLE_GOAL} 个合格样本，且准确率 95% 区间下限高于简单基准。这是保守的使用门槛，不是统计显著性结论，也不代表未来一定有效。` : `Each asset has at least ${QUALIFIED_SAMPLE_GOAL} qualified samples under the current forecast policy, with the 95% lower bound of accuracy above the simple baseline. This is a conservative usage gate, not a significance result, and does not guarantee future performance.`,
     }
     : overallState === "below_baseline"
       ? {
@@ -85,7 +85,7 @@ export function ForecastTrackRecord() {
           body: zh ? "实盘统计缺少时间资格口径或关键指标（可能来自旧版缓存），刷新后再查看；确认之前不作为验证依据。" : "Live statistics lack the timing protocol or a key metric (possibly an old cached response). Refresh to retry; they are not used as validation evidence until confirmed.",
         }
       : {
-        title: zh ? `实盘合格样本积累中（${Math.min(liveSamples, QUALIFIED_SAMPLE_GOAL)}/${QUALIFIED_SAMPLE_GOAL}）` : `Qualified live samples accumulating (${Math.min(liveSamples, QUALIFIED_SAMPLE_GOAL)}/${QUALIFIED_SAMPLE_GOAL})`,
+        title: zh ? `实盘证据积累中（${gates.progress}）` : `Live evidence accumulating (${gates.progress})`,
         body: zh ? "样本不足时只展示数值研究结果，不将历史同向占比解释为未来真实概率；在此期间模型使用保守组合。" : "Until enough qualified samples exist, numeric research outputs are shown without presenting historical direction share as a future probability, and the model runs its conservative ensemble.",
       };
   const publicRecords = data.recent_live_records || [];
@@ -183,12 +183,12 @@ export function ForecastTrackRecord() {
         </tr>;
       })}</tbody></table></div> : <p>{zh ? "当前筛选条件下暂无冻结预测记录。" : "No frozen records match these filters."}</p>}
     </section>
-    <section className="score-methods"><article><ShieldCheck size={18} /><div><strong>{zh ? "自动结算与回滚" : "Automatic settlement and rollback"}</strong><p>{zh ? "每日只结算通过时间资格的冻结预测，用目标交易日的不复权收盘价计算 1日、5日、10日和1个月结果，结算后不可改写。合格样本不足 20 个时使用保守组合；近 20 个合格样本失去优势时进入观察或安全回退。" : "Only time-qualified frozen forecasts are settled, using unadjusted target-session closes for 1D, 5D, 10D and 1M, and settled results are immutable. Below 20 qualified samples the conservative ensemble runs; loss of edge over the latest 20 qualified samples triggers watch or safe rollback."}</p></div></article><article><BrainCircuit size={18} /><div><strong>{zh ? "官方 Kronos 批量模型" : "Official Kronos batch model"}</strong><p>{zh ? "使用 NeoQuasar 官方 Kronos-mini 离线推理；只有批次日期与最新行情一致时才以有限权重加入组合。" : "Official NeoQuasar Kronos-mini runs offline and enters the ensemble at a capped weight only when its batch date matches current market data."}</p></div></article></section>
+    <section className="score-methods"><article><ShieldCheck size={18} /><div><strong>{zh ? "自动结算与回滚" : "Automatic settlement and rollback"}</strong><p>{zh ? `每日只结算通过时间资格的冻结预测，用目标交易日的不复权收盘价计算 1日、5日、10日和1个月结果，结算后不可改写。每个资产当前预测政策版本的合格 1D 样本不足 ${QUALIFIED_SAMPLE_GOAL} 个，或准确率 95% 区间下限未高于简单基准时，使用保守组合且不给操作建议；达到门槛后，近 20 个合格样本失去优势仍会触发观察或安全回退。` : `Only time-qualified frozen forecasts are settled, using unadjusted target-session closes for 1D, 5D, 10D and 1M, and settled results are immutable. Until an asset has ${QUALIFIED_SAMPLE_GOAL} qualified 1D samples under the current forecast policy with the 95% lower bound of accuracy above the simple baseline, the conservative ensemble runs and no action calls are made; after that, loss of edge over the latest 20 qualified samples still triggers watch or safe rollback.`}</p></div></article><article><BrainCircuit size={18} /><div><strong>{zh ? "官方 Kronos 批量模型" : "Official Kronos batch model"}</strong><p>{zh ? "使用 NeoQuasar 官方 Kronos-mini 离线推理；只有批次日期与最新行情一致时才以有限权重加入组合。" : "Official NeoQuasar Kronos-mini runs offline and enters the ensemble at a capped weight only when its batch date matches current market data."}</p></div></article></section>
     <section className="score-assets"><header><h2>{zh ? "核心资产明细" : "Core asset detail"}</h2><small>{data.data_as_of}</small></header><div>{data.per_asset.map((asset) => {
       const assetBacktest = all(asset.backtest.statistics);
       const assetLive = all(qualifiedStats(asset.live.statistics));
       const governance = asset.governance;
-      return <article key={asset.symbol}><header><strong>{asset.symbol}</strong><span className={`governance-status ${governance?.status || "warming_up"}`}>{statusLabel(governance?.status || "warming_up", zh)}</span></header><dl><div><dt>{zh ? "回测优势" : "Backtest edge"}</dt><dd>{formatMetricPercent(assetBacktest?.direction_edge, true)}</dd></div><div><dt>{zh ? "合格样本" : "Qualified samples"}</dt><dd>{assetLive ? assetLive.completed : "—"}</dd></div><div><dt>{zh ? "实盘优势" : "Live edge"}</dt><dd>{formatMetricPercent(assetLive?.direction_edge, true)}</dd></div><div><dt>Kronos</dt><dd>{asset.kronos?.data_as_of || (zh ? "等待批次" : "Awaiting batch")}</dd></div></dl><p>{governance ? (zh ? governance.reason_zh : governance.reason_en) : (zh ? "模型治理样本正在建立。" : "Model-governance evidence is accumulating.")}</p></article>;
+      return <article key={asset.symbol}><header><strong>{asset.symbol}</strong><span className={`governance-status ${governance?.status || "warming_up"}`}>{statusLabel(governance?.status || "warming_up", zh)}</span></header><dl><div><dt>{zh ? "回测优势" : "Backtest edge"}</dt><dd>{formatMetricPercent(assetBacktest?.direction_edge, true)}</dd></div><div><dt>{zh ? "合格样本（当前版本）" : "Qualified samples (current policy)"}</dt><dd>{governance?.evidence_gate ? `${governance.evidence_gate.samples}/${governance.evidence_gate.required}` : assetLive ? assetLive.completed : "—"}</dd></div><div><dt>{zh ? "实盘命中率" : "Live hit rate"}</dt><dd>{accuracyWithInterval(assetLive, zh)}</dd></div><div><dt>{zh ? "实盘优势" : "Live edge"}</dt><dd>{formatMetricPercent(assetLive?.direction_edge, true)}</dd></div><div><dt>Kronos</dt><dd>{asset.kronos?.data_as_of || (zh ? "等待批次" : "Awaiting batch")}</dd></div></dl><p>{governance ? (zh ? governance.reason_zh : governance.reason_en) : (zh ? "模型治理样本正在建立。" : "Model-governance evidence is accumulating.")}</p></article>;
     })}</div></section>
     <p className="score-note">{zh ? "方向优势 = 模型方向准确率 - 同期多数类基准准确率。历史结果不代表未来表现。" : "Direction edge equals model directional accuracy minus the contemporaneous majority-class baseline. Historical results do not guarantee future performance."}</p>
   </main>;
