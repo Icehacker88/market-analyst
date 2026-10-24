@@ -61,7 +61,7 @@ export function ForecastTrackRecord() {
   const backtestTrend = forecastTrend(data.backtest.statistics);
   const liveTrend = forecastTrend(liveStats);
   // Judged per asset from each governance evidence gate, never from the cross-asset total.
-  const gates = gateSummary(data.per_asset.map((asset) => ({ symbol: asset.symbol, gate: asset.governance?.evidence_gate })));
+  const gates = gateSummary(data.symbols, data.per_asset.map((asset) => ({ symbol: asset.symbol, gate: asset.governance?.evidence_gate })), zh);
   const overallState = backtestEdge > 0 && gates.allMet
     ? "validated"
     : (Number.isFinite(backtestEdge) && backtestEdge <= 0) || gates.anyNotMet

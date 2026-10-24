@@ -20,8 +20,8 @@ function forecast(generated = "2026-10-20T19:59:00Z", day = "2026-10-20", policy
 }
 // Enough walk-forward, calibration and live evidence to pass the action gate.
 const metGate = { rule: "wilson95-low-gt-majority-v1", policy_version: CLOUD_FORECAST_POLICY_VERSION, status: "met", samples: 80, required: 60, hits: 56, direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 };
-function actionable<T extends object>(value: T, evidenceGate: Record<string, unknown> | null = metGate) {
-  return { ...value, forecast_1m_return: .05, confidence_score: 80, model_governance: { evidence_gate: evidenceGate },
+function actionable<T extends object>(value: T, evidenceGate: Record<string, unknown> | null = metGate, status: string | null = "stable") {
+  return { ...value, forecast_1m_return: .05, confidence_score: 80, model_governance: { status, evidence_gate: evidenceGate },
     validation: { backtest: { samples: 100, direction_edge: 10 }, live: { samples: 30, direction_edge: 10 } },
     calibration: { sample_size: 30, direction_hit_rate: 65 },
     key_levels: { support: 95, resistance: 110, stop_loss: 90, breakout: 111, invalidation: 90 } };
@@ -170,6 +170,16 @@ describe("closed-session cache recovery", () => {
       expect(served.evaluation_snapshot).toEqual(cached.evaluation_snapshot);
     }
     expect(result.rows).toEqual([ledgerRow(cached)]);
+  });
+  it("never acts during rollback or without a governance status, even with a historical gate met", async () => {
+    for (const status of ["rollback", null]) {
+      const result = await run({ cached: actionable(forecast(postClose), metGate, status), rows: [ledgerRow()], providerError: true });
+      expect(result.data.action.actionable).toBe(false);
+      expect(result.data.signal).toBe("Observe");
+      if (status === "rollback") expect(result.data.action.abstain_reason_zh).toBe("近期实盘表现明显下降，模型已回退到保守组合，暂停操作建议。");
+    }
+    // Control: the same evidence under watch may act.
+    expect((await run({ cached: actionable(forecast(postClose), metGate, "watch"), rows: [ledgerRow()], providerError: true })).data.action.actionable).toBe(true);
   });
   it("is never actionable without a passed live evidence gate, whatever the backtest says", async () => {
     for (const [evidenceGate, reason] of [[null, "0/60"], [{ ...metGate, status: "insufficient", samples: 59 }, "59/60"], [{ ...metGate, status: "not_met" }, "80/60"]] as const) {

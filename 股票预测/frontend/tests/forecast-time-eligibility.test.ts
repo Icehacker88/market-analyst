@@ -44,7 +44,7 @@ beforeAll(async () => {
   const source = await readFile(`${root}functions/api/[[path]].ts`, "utf8");
   const marker = "return { handle, recordCacheMetric };";
   expect(source.split(marker)).toHaveLength(2);
-  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast, recordCloudForecast };");
+  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast, recordCloudForecast, buildForecastAction };");
   const result = await build({ stdin: { contents: instrumented + `
 export default { async fetch(request) {
  const input = await request.json(); const writes=[];
@@ -54,6 +54,7 @@ export default { async fetch(request) {
  if(input.operation==="settle") data=api.attachActualOutcomes(input.row,input.base ?? 100,input.future,input.provenance,input.now);
  if(input.operation==="history") data=api.buildLedgerHistory("SPY",input.rows,input.backtest || false);
  if(input.operation==="governance") data=api.evaluateModelGovernance("SPY",input.rows,input.previous || null);
+ if(input.operation==="action") { const g=api.evaluateModelGovernance("SPY",input.rows,null); data={governance:g,action:api.buildForecastAction(.05,80,{support:95,resistance:110,stop_loss:90,breakout:111,invalidation:90,invalidation_zh:"",invalidation_en:""},{backtest_samples:100,backtest_edge:10,calibration_samples:30,calibration_hit_rate:65,live_samples:0,live_edge:null,live_gate:g.evidence_gate,governance_status:g.status,fresh:true})}; }
  if(input.operation==="reconcile") data=await api.reconcileCloudLedger("SPY",input.rows);
  if(input.operation==="calendar") data={before:equitySession("2026-03-06"),after:equitySession("2026-03-09"),early:equitySession("2026-11-27")};
  if(input.operation==="record") { await api.recordCloudForecast("SPY",input.forecast,input.frozenAt,input.publicationId); data=true; }
@@ -236,6 +237,14 @@ describe("frozen forecast timing contract", () => {
     const collapsed = await (await call("governance", { rows: series(100, (i) => i < 80 ? i % 10 < 9 : false) })).data;
     expect(collapsed.evidence_gate.status).toBe("met");
     expect([collapsed.status, collapsed.active_model]).toEqual(["rollback", "Orivane Ensemble Safe Mode"]);
+  });
+  it("generation-path action follows governance: rollback never acts even when the overall gate is met", async () => {
+    const collapsed = (await call("action", { rows: series(100, (i) => i < 80 ? i % 10 < 9 : false) })).data;
+    expect([collapsed.governance.status, collapsed.governance.evidence_gate.status]).toEqual(["rollback", "met"]);
+    expect(collapsed.action.actionable).toBe(false);
+    expect(collapsed.action.summary_zh).toContain("模型已回退到保守组合");
+    const healthy = (await call("action", { rows: series(80, (i) => i % 10 < 7) })).data;
+    expect([healthy.governance.status, healthy.action.actionable]).toEqual(["stable", true]);
   });
   it("counts one outcome per base date and ignores other policy versions in the gate", async () => {
     const rows = series(60, () => true);

@@ -1622,6 +1622,7 @@ function buildForecastAction(
     live_samples?: number;
     live_edge?: number | null;
     live_gate?: EvidenceGate | null;
+    governance_status?: string | null;
     fresh?: boolean;
   },
 ): ForecastAction {
@@ -1638,14 +1639,21 @@ function buildForecastAction(
   const liveContradicts = liveSamples >= 20 && (liveEdge === null || liveEdge <= 0);
   const gate = evidence?.live_gate ?? null;
   const gateMet = gate?.status === "met";
-  if (!fresh || !hasValidation || !positiveEdge || !calibrated || liveContradicts || !gateMet) {
-    const evidenceStatus: ForecastAction["evidence_status"] = !fresh || !hasValidation
+  // Governance is its own hard veto: only stable or watch may act. Rollback keeps the true
+  // historical gate result but never produces an action call; a missing status never acts.
+  const governanceStatus = evidence?.governance_status ?? null;
+  const rolledBack = governanceStatus === "rollback";
+  const governanceAllows = governanceStatus === "stable" || governanceStatus === "watch";
+  if (!fresh || rolledBack || !hasValidation || !positiveEdge || !calibrated || liveContradicts || !gateMet || !governanceAllows) {
+    const evidenceStatus: ForecastAction["evidence_status"] = !fresh || (!rolledBack && !hasValidation)
       ? "insufficient"
-      : !positiveEdge || liveContradicts
+      : rolledBack || !positiveEdge || liveContradicts
         ? "negative_edge"
         : "provisional";
     const reasonZh = !fresh
       ? "行情日期已晚于该预测，等待按最新交易日重新计算。"
+      : rolledBack
+        ? "近期实盘表现明显下降，模型已回退到保守组合，暂停操作建议。"
       : !hasValidation
         ? `数值预测已生成，但独立走步验证或相似样本尚未达到操作门槛（${samples}/60，${calibrationSamples}/20）。`
         : !positiveEdge
@@ -1657,6 +1665,8 @@ function buildForecastAction(
             : `数值预测已生成，但实盘证据尚未达到操作门槛（当前预测政策版本合格样本 ${gate?.samples ?? 0}/${gate?.required ?? 60}，且准确率 95% 区间下限须高于多数类基准）。`;
     const reasonEn = !fresh
       ? "Market data is newer than this forecast; wait for a current-session recalculation."
+      : rolledBack
+        ? "Recent live performance dropped sharply; the model rolled back to the conservative ensemble and action calls are paused."
       : !hasValidation
         ? `Numeric forecasts are available, but walk-forward or similar-signal evidence is below the action threshold (${samples}/60, ${calibrationSamples}/20).`
         : !positiveEdge
@@ -5383,6 +5393,7 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>, freshInput
       live_edge: toNumber(live.direction_edge),
       // Gate from generation time; a forecast without one (older cache) is never actionable.
       live_gate: ((forecast.model_governance as { evidence_gate?: EvidenceGate } | undefined)?.evidence_gate) ?? null,
+      governance_status: ((forecast.model_governance as { status?: string } | undefined)?.status) ?? null,
       fresh,
     },
   );
@@ -5643,6 +5654,7 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
     live_samples: liveSamples,
     live_edge: toNumber(liveAll?.direction_edge),
     live_gate: modelGovernance.evidence_gate,
+    governance_status: modelGovernance.status,
     fresh: true,
   });
   const monthInterval = intervals.find((item) => item.horizon === "1M")!;

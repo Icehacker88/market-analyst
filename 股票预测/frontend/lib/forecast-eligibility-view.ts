@@ -107,14 +107,24 @@ export function accuracyWithInterval(stat: Pick<LedgerStat, "direction_accuracy"
   return zh ? `${point}（95% 区间 ${low.toFixed(1)}–${high.toFixed(1)}%）` : `${point} (95% interval ${low.toFixed(1)}–${high.toFixed(1)}%)`;
 }
 
-// Gates are judged per asset; a cross-asset total never stands in for one asset's evidence.
-export function gateSummary(gates: Array<{ symbol: string; gate?: EvidenceGate | null }>): { known: boolean; allMet: boolean; anyNotMet: boolean; progress: string } {
-  const known = gates.length > 0 && gates.every((item) => item.gate);
+// Gates are judged per asset against the full expected core set: a missing asset, a duplicate or a
+// missing gate leaves the verdict unknown, and a cross-asset total never stands in for one asset.
+export function gateSummary(expected: string[], assets: Array<{ symbol: string; gate?: EvidenceGate | null }>, zh = true): { known: boolean; allMet: boolean; anyNotMet: boolean; missing: string[]; progress: string } {
+  const symbols = [...new Set(expected.map((symbol) => symbol.toUpperCase()))];
+  const lookup = symbols.map((symbol) => {
+    const matches = assets.filter((item) => item.symbol.toUpperCase() === symbol);
+    return { symbol, gate: matches.length === 1 ? matches[0].gate ?? null : null };
+  });
+  const missing = lookup.filter((item) => !item.gate).map((item) => item.symbol);
+  const known = symbols.length > 0 && missing.length === 0;
   return {
     known,
-    allMet: known && gates.every((item) => item.gate!.status === "met"),
-    anyNotMet: gates.some((item) => item.gate?.status === "not_met"),
-    progress: gates.map((item) => `${item.symbol} ${item.gate ? Math.min(item.gate.samples, item.gate.required) : 0}/${item.gate?.required ?? QUALIFIED_SAMPLE_GOAL}`).join(" · "),
+    allMet: known && lookup.every((item) => item.gate!.status === "met"),
+    anyNotMet: lookup.some((item) => item.gate?.status === "not_met"),
+    missing,
+    progress: lookup.map((item) => item.gate
+      ? `${item.symbol} ${Math.min(item.gate.samples, item.gate.required)}/${item.gate.required}`
+      : `${item.symbol} ${zh ? "数据缺失" : "data missing"}`).join(" · "),
   };
 }
 

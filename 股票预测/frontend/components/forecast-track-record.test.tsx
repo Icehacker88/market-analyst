@@ -16,7 +16,9 @@ const backtestStat = (horizon: string) => stat(horizon, { completed: 360, direct
 // Right after the timing contract ships: legacy outcomes exist but none qualify.
 const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
 const gate = (status: EvidenceGate["status"], samples: number, extra: Partial<EvidenceGate> = {}): EvidenceGate => ({ rule: "wilson95-low-gt-majority-v1", policy_version: "cloud-forecast-policy-v1", status, samples, required: 60, hits: 0, direction_accuracy: null, ci_low: null, ci_high: null, majority_baseline_accuracy: null, ...extra });
-const withGate = (board: ForecastScoreboard, evidence: EvidenceGate | null): ForecastScoreboard => ({ ...board, per_asset: board.per_asset.map((asset) => ({ ...asset, governance: asset.governance ? { ...asset.governance, evidence_gate: evidence } : asset.governance })) });
+// One per_asset entry per core symbol (SPY, QQQ, NVDA), each with the same gate unless `only` limits them.
+const withGate = (board: ForecastScoreboard, evidence: EvidenceGate | null, only = board.symbols): ForecastScoreboard => ({ ...board,
+  per_asset: only.map((symbol) => ({ ...board.per_asset[0], symbol, governance: board.per_asset[0].governance ? { ...board.per_asset[0].governance, evidence_gate: evidence } : null })) });
 const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1" }]));
 
 const scoreboard: ForecastScoreboard = {
@@ -66,7 +68,7 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
     vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard, backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } }, gate("insufficient", 0)));
     render(<ForecastTrackRecord />);
-    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 0/60）")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 0/60 · QQQ 0/60 · NVDA 0/60）")).toBeInTheDocument());
     expect(screen.getAllByText("等待合格样本").length).toBe(4);
   });
 
@@ -88,7 +90,7 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
 
   it.each([
     ["an asset with 60 samples whose lower bound does not beat the baseline", gate("not_met", 60, { direction_accuracy: 55, ci_low: 42.5, ci_high: 67, majority_baseline_accuracy: 53 }), "当前模型尚未证明优于简单基准"],
-    ["59 samples", gate("insufficient", 59), "实盘证据积累中（SPY 59/60）"],
+    ["59 samples", gate("insufficient", 59), "实盘证据积累中（SPY 59/60 · QQQ 59/60 · NVDA 59/60）"],
     ["no gate in the response (old cache)", null, "实盘成绩暂不可判定"],
     ["a met gate", gate("met", 80, { direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 }), "各核心资产均已达到既定证据门槛"],
   ])("banner for %s", async (_name, evidence, title) => {
@@ -100,6 +102,16 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
     if (evidence) expect(container.querySelector(".score-assets")!.textContent).toContain(`${(evidence as EvidenceGate).samples}/60`);
   });
 
+  it.each([[["SPY"]], [["SPY", "QQQ"]]])("never claims every asset met when core assets %j are the only ones returned", async (only) => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    const met = gate("met", 80, { direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } }, met, only));
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
+  });
+
   it("never validates from a strong cross-asset total while an asset's own gate is short", async () => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
     const strongTotal = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", completed: 100, direction_accuracy: 70, majority_baseline_accuracy: 52, direction_edge: 18, direction_accuracy_ci_low: 60.4, direction_accuracy_ci_high: 78.1, observed: 100, eligible: 100, ineligible: 0, unknown: 0, excluded: 0 });
@@ -107,7 +119,7 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
       backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
       live: { statistics: [strongTotal("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(strongTotal) } }, gate("insufficient", 33)));
     const { container } = render(<ForecastTrackRecord />);
-    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 33/60）")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 33/60 · QQQ 33/60 · NVDA 33/60）")).toBeInTheDocument());
     expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
   });
 });
