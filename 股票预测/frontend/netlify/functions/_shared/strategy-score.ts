@@ -41,6 +41,22 @@ export type StrategyComparison = {
   strategies: StrategyResult[];
 };
 
+const CLOSE_CONFIRMATION_MS = 15 * 60000;
+
+// Latest session whose close the data itself confirms: close + 15 minutes must not be later than
+// when the price history was fetched. An intraday fetch, or an intraday cache read after the
+// close, leaves that day unconfirmed; early closes come from the reviewed calendar.
+export function lastConfirmedSession(observedAt: string | null | undefined): string | null {
+  const observed = Date.parse(observedAt ?? "");
+  if (!Number.isFinite(observed)) return null;
+  for (let offset = 0; offset < 10; offset += 1) {
+    const day = new Date(observed - offset * 86400000).toISOString().slice(0, 10);
+    const session = equitySession(day);
+    if (session && session.close + CLOSE_CONFIRMATION_MS <= observed) return day;
+  }
+  return null;
+}
+
 const WEIGHTS: Record<StrategyKey, (signal: ScoredSignal | undefined) => number> = {
   buy_hold: () => 1,
   long_only: (signal) => signal && signal.forecast > 0 ? 1 : 0,
@@ -48,11 +64,17 @@ const WEIGHTS: Record<StrategyKey, (signal: ScoredSignal | undefined) => number>
   actionable_only: (signal) => signal?.action === "Up" ? 1 : signal?.action === "Down" ? -1 : 0,
 };
 
-export function scoreStrategies(signals: ScoredSignal[], closes: Map<string, number>, options: { source: "live" | "backtest"; includeActionable: boolean; minimumSamples: number }): StrategyComparison {
+// `confirmedThrough`: the last session with a confirmed close (see lastConfirmedSession). Signals
+// whose target is later are an unconfirmed tail and are left out rather than scored on a last
+// price; `null` means no close is confirmed at all. Omitted only in pure unit tests.
+export function scoreStrategies(signals: ScoredSignal[], closes: Map<string, number>, options: { source: "live" | "backtest"; includeActionable: boolean; minimumSamples: number; confirmedThrough?: string | null }): StrategyComparison {
   // Only bases on the reviewed calendar can be checked for gaps; earlier ones are left out.
   const byBase = new Map<string, ScoredSignal>();
   for (const signal of [...signals].sort((a, b) => a.base.localeCompare(b.base))) {
-    if (!byBase.has(signal.base) && Number.isFinite(signal.forecast) && equitySession(signal.base) && followingSessions(signal.base, 1).length) byBase.set(signal.base, signal);
+    const target = equitySession(signal.base) ? followingSessions(signal.base, 1)[0] : undefined;
+    if (!target || byBase.has(signal.base) || !Number.isFinite(signal.forecast)) continue;
+    if (options.confirmedThrough !== undefined && (options.confirmedThrough === null || target > options.confirmedThrough)) continue;
+    byBase.set(signal.base, signal);
   }
   const keys: StrategyKey[] = options.includeActionable ? ["buy_hold", "long_only", "long_short", "actionable_only"] : ["buy_hold", "long_only", "long_short"];
   const empty = (status: StrategyComparison["status"], reason: string | null, extra: Partial<StrategyComparison> = {}): StrategyComparison => ({
@@ -60,7 +82,7 @@ export function scoreStrategies(signals: ScoredSignal[], closes: Map<string, num
     start_target: null, end_target: null, days: 0, signal_days: 0, missing_signal_days: 0, minimum_samples: options.minimumSamples, sufficient: false, strategies: [], ...extra,
   });
   const bases = [...byBase.keys()];
-  if (!bases.length) return empty("no_data", null);
+  if (!bases.length) return empty("no_data", options.confirmedThrough === null ? "close_unconfirmed" : null);
   // Day t pairs the signal frozen after base B with the target T = next session: r = Close(T)/Close(B) − 1.
   const lastTarget = followingSessions(bases[bases.length - 1], 1)[0];
   const steps: Array<{ target: string; r: number; signal: ScoredSignal | undefined }> = [];

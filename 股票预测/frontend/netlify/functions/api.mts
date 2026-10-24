@@ -1,6 +1,6 @@
 import { BASE_PRICE_REVISION_RTOL, CLOUD_FORECAST_POLICY_VERSION, isCurrentPolicy, LIVE_EVIDENCE_MIN_SAMPLES, LIVE_EVIDENCE_RULE, wilsonInterval, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import { fillClosedSessionBar, type YahooChartMeta } from "./_shared/yahoo-chart";
-import { scoreStrategies, type ScoredSignal } from "./_shared/strategy-score";
+import { lastConfirmedSession, scoreStrategies, type ScoredSignal } from "./_shared/strategy-score";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
 import { pinyin } from "pinyin-pro";
@@ -3064,7 +3064,7 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
   const settled = await Promise.allSettled(symbols.map(async (symbol) => {
     const asset = inferAsset(symbol);
     const start = new Date(Date.now() - 900 * 86400000).toISOString().slice(0, 10);
-    const history = await cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as { data_as_of?: string; records: HistoryRecord[] };
+    const history = await cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as { data_as_of?: string; source_observed_at?: string; records: HistoryRecord[] };
     const [live, governance, kronos] = await Promise.all([
       cloudLedgerHistory(asset.symbol).catch(() => null),
       readModelGovernance(asset.symbol).catch(() => null),
@@ -3087,6 +3087,9 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
     // Live: only scored current-version outcomes (Verified is scoredOutcome from buildLedgerHistory).
     const liveSignals = ((result.value.live?.records || []) as Array<Record<string, unknown>>).filter((row) => row.Verified === true).map(signal);
     const backtestSignals = assetBacktestRows.filter((row) => toNumber(row.Actual_1D_Return) !== null && toNumber(row.Forecast_1D_Return) !== null).map(signal);
+    // A Yahoo daily bar has a numeric Close intraday: only targets whose close the history fetch
+    // itself confirms are scored (an intraday cache read after the close stays unconfirmed).
+    const confirmedThrough = lastConfirmedSession(result.value.history.source_observed_at);
     perAsset.push({
       symbol: result.value.symbol,
       data_as_of: result.value.history.data_as_of || null,
@@ -3100,8 +3103,8 @@ async function forecastScoreboard(): Promise<Record<string, unknown>> {
       },
       governance: evaluateModelGovernance(result.value.symbol, (result.value.live?.records || []) as Array<Record<string, unknown>>, result.value.governance),
       strategy: {
-        live: scoreStrategies(liveSignals, closes, { source: "live", includeActionable: true, minimumSamples: LIVE_EVIDENCE_MIN_SAMPLES }),
-        backtest: scoreStrategies(backtestSignals, closes, { source: "backtest", includeActionable: false, minimumSamples: LIVE_EVIDENCE_MIN_SAMPLES }),
+        live: scoreStrategies(liveSignals, closes, { source: "live", includeActionable: true, minimumSamples: LIVE_EVIDENCE_MIN_SAMPLES, confirmedThrough }),
+        backtest: scoreStrategies(backtestSignals, closes, { source: "backtest", includeActionable: false, minimumSamples: LIVE_EVIDENCE_MIN_SAMPLES, confirmedThrough }),
       },
       kronos: result.value.kronos ? {
         model_id: result.value.kronos.model_id,
