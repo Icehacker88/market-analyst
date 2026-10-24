@@ -1,4 +1,4 @@
-import { BASE_PRICE_REVISION_RTOL, CLOUD_FORECAST_POLICY_VERSION, isCurrentPolicy, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
+import { BASE_PRICE_REVISION_RTOL, CLOUD_FORECAST_POLICY_VERSION, isCurrentPolicy, LIVE_EVIDENCE_MIN_SAMPLES, LIVE_EVIDENCE_RULE, wilsonInterval, currentPublicationWindow, supportsEquityCalendar, EQUITY_CALENDAR_VERSION, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, equitySession, HORIZON_DAYS, SETTLEMENT_BASIS, TIMING_PROTOCOL, type EvaluationSnapshot } from "./_shared/forecast-eligibility";
 import { fillClosedSessionBar, type YahooChartMeta } from "./_shared/yahoo-chart";
 import type { Config, Context } from "@netlify/functions";
 import { getDeployStore, getStore } from "@netlify/blobs";
@@ -107,6 +107,18 @@ type ContextualForecastSignal = {
   drivers_zh: string[];
   drivers_en: string[];
 };
+type EvidenceGate = {
+  rule: typeof LIVE_EVIDENCE_RULE;
+  policy_version: string;
+  status: "insufficient" | "not_met" | "met";
+  samples: number;
+  required: number;
+  hits: number;
+  direction_accuracy: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  majority_baseline_accuracy: number | null;
+};
 type ModelGovernance = {
   symbol: string;
   version: "model-governance-v1";
@@ -121,6 +133,7 @@ type ModelGovernance = {
   accuracy_60: number | null;
   drift_score: number;
   rollback_count: number;
+  evidence_gate: EvidenceGate;
   reason_zh: string;
   reason_en: string;
 };
@@ -1608,6 +1621,8 @@ function buildForecastAction(
     calibration_hit_rate?: number | null;
     live_samples?: number;
     live_edge?: number | null;
+    live_gate?: EvidenceGate | null;
+    governance_status?: string | null;
     fresh?: boolean;
   },
 ): ForecastAction {
@@ -1622,30 +1637,45 @@ function buildForecastAction(
   const positiveEdge = edge !== null && edge >= 2;
   const calibrated = calibrationHitRate !== null && calibrationHitRate >= 52;
   const liveContradicts = liveSamples >= 20 && (liveEdge === null || liveEdge <= 0);
-  if (!fresh || !hasValidation || !positiveEdge || !calibrated || liveContradicts) {
-    const evidenceStatus: ForecastAction["evidence_status"] = !fresh || !hasValidation
+  const gate = evidence?.live_gate ?? null;
+  const gateMet = gate?.status === "met";
+  // Governance is its own hard veto: only stable or watch may act. Rollback keeps the true
+  // historical gate result but never produces an action call; a missing status never acts.
+  const governanceStatus = evidence?.governance_status ?? null;
+  const rolledBack = governanceStatus === "rollback";
+  const governanceAllows = governanceStatus === "stable" || governanceStatus === "watch";
+  if (!fresh || rolledBack || !hasValidation || !positiveEdge || !calibrated || liveContradicts || !gateMet || !governanceAllows) {
+    const evidenceStatus: ForecastAction["evidence_status"] = !fresh || (!rolledBack && !hasValidation)
       ? "insufficient"
-      : !positiveEdge || liveContradicts
+      : rolledBack || !positiveEdge || liveContradicts
         ? "negative_edge"
         : "provisional";
     const reasonZh = !fresh
       ? "行情日期已晚于该预测，等待按最新交易日重新计算。"
+      : rolledBack
+        ? "近期实盘表现明显下降，模型已回退到保守组合，暂停操作建议。"
       : !hasValidation
         ? `数值预测已生成，但独立走步验证或相似样本尚未达到操作门槛（${samples}/60，${calibrationSamples}/20）。`
         : !positiveEdge
           ? `数值预测已生成，但走步验证相对多数类基准的优势为 ${edge?.toFixed(1) ?? "—"} 个百分点，暂不形成仓位建议。`
           : liveContradicts
             ? `数值预测已生成，但最近 ${liveSamples} 次真实冻结预测相对多数类基准的优势为 ${liveEdge?.toFixed(1) ?? "—"} 个百分点，暂不形成仓位建议。`
-          : `数值预测已生成，但相似样本命中率 ${calibrationHitRate?.toFixed(1) ?? "—"}% 尚未达到操作门槛。`;
+          : !calibrated
+            ? `数值预测已生成，但相似样本命中率 ${calibrationHitRate?.toFixed(1) ?? "—"}% 尚未达到操作门槛。`
+            : `数值预测已生成，但实盘证据尚未达到操作门槛（当前预测政策版本合格样本 ${gate?.samples ?? 0}/${gate?.required ?? 60}，且准确率 95% 区间下限须高于多数类基准）。`;
     const reasonEn = !fresh
       ? "Market data is newer than this forecast; wait for a current-session recalculation."
+      : rolledBack
+        ? "Recent live performance dropped sharply; the model rolled back to the conservative ensemble and action calls are paused."
       : !hasValidation
         ? `Numeric forecasts are available, but walk-forward or similar-signal evidence is below the action threshold (${samples}/60, ${calibrationSamples}/20).`
         : !positiveEdge
           ? `Numeric forecasts are available, but walk-forward edge versus the majority baseline is ${edge?.toFixed(1) ?? "—"} percentage points, so no position call is issued.`
           : liveContradicts
             ? `Numeric forecasts are available, but the latest ${liveSamples} frozen forecasts have an edge of ${liveEdge?.toFixed(1) ?? "—"} percentage points versus the majority baseline, so no position call is issued.`
-          : `Numeric forecasts are available, but the similar-signal hit rate of ${calibrationHitRate?.toFixed(1) ?? "—"}% is below the action threshold.`;
+          : !calibrated
+            ? `Numeric forecasts are available, but the similar-signal hit rate of ${calibrationHitRate?.toFixed(1) ?? "—"}% is below the action threshold.`
+            : `Numeric forecasts are available, but live evidence has not met the action gate (${gate?.samples ?? 0}/${gate?.required ?? 60} qualified outcomes under the current policy; the 95% lower bound must exceed the majority baseline).`;
     return {
       stance: "wait",
       actionable: false,
@@ -4699,6 +4729,39 @@ function horizonStatistics(ordered: Array<Record<string, unknown>>, horizon: str
     median_absolute_return_error: errors.length ? [...errors].sort((a, b) => a - b)[Math.floor(errors.length / 2)] : null,
     hit_count: correct.filter((value) => value === 1).length,
     miss_count: correct.filter((value) => value === 0).length,
+    direction_accuracy_ci_low: wilsonInterval(correct.filter((value) => value === 1).length, correct.length)?.low ?? null,
+    direction_accuracy_ci_high: wilsonInterval(correct.filter((value) => value === 1).length, correct.length)?.high ?? null,
+  };
+}
+
+// The single evidence gate: one scored 1D outcome per base date, current policy version only.
+function liveEvidenceGate(records: Array<Record<string, unknown>>): EvidenceGate {
+  const byBase = new Map<string, Record<string, unknown>>();
+  for (const row of records) {
+    const base = String(row.As_Of_Date || "").slice(0, 10);
+    if (!base || byBase.has(base) || !scoredOutcome(row, "1D")) continue;
+    if (toNumber(row.Actual_1D_Return) === null || toNumber(row.Raw_Direction_Correct) === null) continue;
+    byBase.set(base, row);
+  }
+  const rows = [...byBase.values()];
+  const samples = rows.length;
+  const hits = rows.filter((row) => toNumber(row.Raw_Direction_Correct) === 1).length;
+  const ups = rows.filter((row) => Number(row.Actual_1D_Return) >= 0).length;
+  const interval = wilsonInterval(hits, samples);
+  const baseline = samples ? Math.max(ups, samples - ups) / samples * 100 : null;
+  const status: EvidenceGate["status"] = samples < LIVE_EVIDENCE_MIN_SAMPLES ? "insufficient"
+    : interval && baseline !== null && interval.low > baseline ? "met" : "not_met";
+  return {
+    rule: LIVE_EVIDENCE_RULE,
+    policy_version: CLOUD_FORECAST_POLICY_VERSION,
+    status,
+    samples,
+    required: LIVE_EVIDENCE_MIN_SAMPLES,
+    hits,
+    direction_accuracy: samples ? hits / samples * 100 : null,
+    ci_low: interval?.low ?? null,
+    ci_high: interval?.high ?? null,
+    majority_baseline_accuracy: baseline,
   };
 }
 
@@ -4845,18 +4908,26 @@ function evaluateModelGovernance(symbol: string, records: Array<Record<string, u
     0,
     100,
   );
-  let status: ModelGovernance["status"] = "warming_up";
+  // Protective drift rules (unchanged) may roll back early: degrading is always more conservative.
+  let drift: ModelGovernance["status"] = "warming_up";
   if (samples20 >= 20) {
-    status = (edge20 !== null && edge20 <= -3) || (accuracyDrop >= 10 && Number(edge20 ?? -1) <= 0)
+    drift = (edge20 !== null && edge20 <= -3) || (accuracyDrop >= 10 && Number(edge20 ?? -1) <= 0)
       ? "rollback"
       : (edge20 !== null && edge20 < 1) || accuracyDrop >= 6
         ? "watch"
         : "stable";
   }
-  if (previous?.status === "rollback" && status === "watch" && Number(edge20 ?? 0) < 3) status = "rollback";
+  if (previous?.status === "rollback" && drift === "watch" && Number(edge20 ?? 0) < 3) drift = "rollback";
+  // Precedence: rollback > evidence gate not passed (warming_up) > watch > stable. Nothing but a
+  // passed gate leaves Safe Mode, so watch can no longer run the Router on thin evidence.
+  const gate = liveEvidenceGate(records);
+  const status: ModelGovernance["status"] = drift === "rollback" ? "rollback" : gate.status !== "met" ? "warming_up" : drift === "watch" ? "watch" : "stable";
   const activeModel = (status === "rollback" || status === "warming_up") ? "Orivane Ensemble Safe Mode" : "Orivane Horizon Router";
+  const pct = (value: number | null) => value === null ? "—" : `${value.toFixed(1)}%`;
   const reasons = status === "warming_up"
-    ? [`时间资格通过的已结算样本 ${samplesAll} 个；不足 20 个，保持保守组合，不据此确认模型有效。`, `Only ${samplesAll} time-qualified outcomes; keep the conservative ensemble until 20 qualified samples.`]
+    ? gate.status === "insufficient"
+      ? [`证据不足：当前预测政策版本的合格 1D 样本 ${gate.samples}/${gate.required}，保持保守组合，不给出操作建议。`, `Insufficient evidence: ${gate.samples}/${gate.required} qualified 1D outcomes under the current forecast policy; the conservative ensemble stays on and no action calls are made.`]
+      : [`尚未达到既定证据门槛：${gate.samples} 个样本命中率 ${pct(gate.direction_accuracy)}，95% 区间下限 ${pct(gate.ci_low)} 未高于多数类基准 ${pct(gate.majority_baseline_accuracy)}，保持保守组合。`, `Evidence gate not met: ${gate.samples} outcomes at ${pct(gate.direction_accuracy)}; the 95% lower bound ${pct(gate.ci_low)} does not exceed the majority baseline ${pct(gate.majority_baseline_accuracy)}. The conservative ensemble stays on.`]
     : status === "rollback"
       ? [`近 20 个真实样本方向优势 ${edge20?.toFixed(1) ?? "—"} 个百分点，已回退到未调权组合并暂停未验证叠加信号。`, `The latest 20-sample edge is ${edge20?.toFixed(1) ?? "—"} points; the router rolled back to the untuned ensemble and paused unvalidated overlays.`]
       : status === "watch"
@@ -4876,6 +4947,7 @@ function evaluateModelGovernance(symbol: string, records: Array<Record<string, u
     accuracy_60: accuracy60,
     drift_score: Number(driftScore.toFixed(2)),
     rollback_count: Number(previous?.rollback_count || 0) + (status === "rollback" && previous?.status !== "rollback" ? 1 : 0),
+    evidence_gate: gate,
     reason_zh: reasons[0],
     reason_en: reasons[1],
   };
@@ -5319,6 +5391,9 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>, freshInput
       calibration_hit_rate: toNumber(month?.direction_probability ?? calibration.direction_hit_rate),
       live_samples: Number(live.samples || 0),
       live_edge: toNumber(live.direction_edge),
+      // Gate from generation time; a forecast without one (older cache) is never actionable.
+      live_gate: ((forecast.model_governance as { evidence_gate?: EvidenceGate } | undefined)?.evidence_gate) ?? null,
+      governance_status: ((forecast.model_governance as { status?: string } | undefined)?.status) ?? null,
       fresh,
     },
   );
@@ -5341,6 +5416,8 @@ function applyCurrentForecastGuard(forecast: Record<string, unknown>, freshInput
         minimum_similar_hit_rate: 52,
         live_guard_minimum_samples: 20,
         live_guard_requires_positive_edge: true,
+        live_evidence_minimum_samples: LIVE_EVIDENCE_MIN_SAMPLES,
+        live_evidence_rule: LIVE_EVIDENCE_RULE,
       },
     },
   };
@@ -5501,7 +5578,8 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
   const liveHistory = await cloudLedgerHistory(asset.symbol).catch(() => null);
   const liveRecords = Array.isArray(liveHistory?.records) ? liveHistory.records as Array<Record<string, unknown>> : [];
   const modelGovernance = await persistModelGovernance(asset.symbol, liveRecords).catch(() => evaluateModelGovernance(asset.symbol, liveRecords, null));
-  const safeMode = modelGovernance.status === "rollback" || modelGovernance.status === "warming_up";
+  // Keyed to the active model, not a list of status names, so no new status can bypass it.
+  const safeMode = modelGovernance.active_model === "Orivane Ensemble Safe Mode";
   const dailyVolatility = Number(history.snapshot.annualized_volatility_20d || 0) / Math.sqrt(252) || 0.012;
   const [officialKronos, contextualSignal] = safeMode
     ? [null, null]
@@ -5575,6 +5653,8 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
     calibration_hit_rate: actionHorizon.direction_probability,
     live_samples: liveSamples,
     live_edge: toNumber(liveAll?.direction_edge),
+    live_gate: modelGovernance.evidence_gate,
+    governance_status: modelGovernance.status,
     fresh: true,
   });
   const monthInterval = intervals.find((item) => item.horizon === "1M")!;
@@ -5609,6 +5689,8 @@ async function cloudTrendForecast(symbol: string, optimize = true): Promise<Reco
       minimum_similar_hit_rate: 52,
       live_guard_minimum_samples: 20,
       live_guard_requires_positive_edge: true,
+      live_evidence_minimum_samples: LIVE_EVIDENCE_MIN_SAMPLES,
+      live_evidence_rule: LIVE_EVIDENCE_RULE,
     },
     horizons: Object.fromEntries(horizonModels.map((item) => {
       const liveStats = Array.isArray(liveHistory?.horizon_statistics)

@@ -1,11 +1,12 @@
 import { FORECAST_POLICY_VERSION } from "./forecast-policy";
-import type { Forecast, LedgerRecord, LedgerStat } from "./types";
+import type { EvidenceGate, Forecast, LedgerRecord, LedgerStat } from "./types";
 
 // Display helpers for the frozen-close-v1 timing contract (see docs/forecast-time-phase1-2026-10-19.md).
 // Only "counted" records feed live accuracy; every other record stays visible with its reason.
 export type RecordState = "counted" | "excluded" | "awaiting" | "unconfirmed";
 
-export const QUALIFIED_SAMPLE_GOAL = 20;
+// Per-asset evidence gate (user-confirmed 2026-10-24): current policy version only.
+export const QUALIFIED_SAMPLE_GOAL = 60;
 export const SUPPORTED_PROTOCOL = "frozen-close-v1";
 
 const VERIFIED_FIELD: Record<string, string> = { "1D": "Verified", "5D": "Verified_5D", "10D": "Verified_10D", "1M": "Verified_1M" };
@@ -95,6 +96,39 @@ export function onePerBaseDate(records: LedgerRecord[]): { row: LedgerRecord; ot
     const chosen = Math.max(0, rows.findIndex((row) => qualification(row, "1D")?.status === "eligible"));
     return { row: rows[chosen], others: rows.filter((_, index) => index !== chosen) };
   });
+}
+
+// "58.0%（95% 区间 41.2–73.6%）"; just the point estimate when no interval is known.
+export function accuracyWithInterval(stat: Pick<LedgerStat, "direction_accuracy" | "direction_accuracy_ci_low" | "direction_accuracy_ci_high"> | undefined, zh: boolean): string {
+  const value = stat?.direction_accuracy;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const low = stat?.direction_accuracy_ci_low, high = stat?.direction_accuracy_ci_high;
+  const point = `${value.toFixed(1)}%`;
+  if (typeof low !== "number" || typeof high !== "number") return point;
+  return zh ? `${point}（95% 区间 ${low.toFixed(1)}–${high.toFixed(1)}%）` : `${point} (95% interval ${low.toFixed(1)}–${high.toFixed(1)}%)`;
+}
+
+// Gates are judged per asset against the full expected core set: a missing asset, a duplicate or a
+// missing gate leaves the verdict unknown, and a cross-asset total never stands in for one asset.
+export function gateSummary(expected: string[], assets: Array<{ symbol: string; gate?: EvidenceGate | null }>, zh = true): { known: boolean; allMet: boolean; anyNotMet: boolean; missing: string[]; progress: string } {
+  const symbols = [...new Set(expected.map((symbol) => symbol.toUpperCase()))];
+  const lookup = symbols.map((symbol) => {
+    const matches = assets.filter((item) => item.symbol.toUpperCase() === symbol);
+    // A gate from another policy version (e.g. a cached older response) counts as missing.
+    const gate = matches.length === 1 ? matches[0].gate ?? null : null;
+    return { symbol, gate: gate && gate.policy_version === FORECAST_POLICY_VERSION ? gate : null };
+  });
+  const missing = lookup.filter((item) => !item.gate).map((item) => item.symbol);
+  const known = symbols.length > 0 && missing.length === 0;
+  return {
+    known,
+    allMet: known && lookup.every((item) => item.gate!.status === "met"),
+    anyNotMet: lookup.some((item) => item.gate?.status === "not_met"),
+    missing,
+    progress: lookup.map((item) => item.gate
+      ? `${item.symbol} ${Math.min(item.gate.samples, item.gate.required)}/${item.gate.required}`
+      : `${item.symbol} ${zh ? "数据缺失" : "data missing"}`).join(" · "),
+  };
 }
 
 export function isCounted(row: LedgerRecord, horizon: string): boolean {

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pendingRecords from "../../contracts/pending-forecast-regressions.json";
 import lateRecords from "../../contracts/late-forecast-regressions.json";
-import { CLOUD_FORECAST_POLICY_VERSION, equitySession, followingSessions, makeEvaluationSnapshot, qualifyForecast, outcomeEligible } from "../netlify/functions/_shared/forecast-eligibility";
+import { CLOUD_FORECAST_POLICY_VERSION, equitySession, followingSessions, makeEvaluationSnapshot, qualifyForecast, outcomeEligible, wilsonInterval } from "../netlify/functions/_shared/forecast-eligibility";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const now = Date.parse("2026-10-19T00:00:00Z");
 function row() {
@@ -15,6 +15,24 @@ function row() {
   return { Ticker: "SPY", As_Of_Date: "2026-09-02", Created_At: generated, Evaluation_Snapshot: { ...snapshot, frozen_at: generated }, Forecast_1D_Return: .01, Action_Signal: "Up" };
 }
 const future = [{ Date: "2026-09-03", Price: 110, "Adj Close": 110, Close: 110 }];
+// A settled, time-qualified, current-version 1D record for base session `day`.
+function scored(day: string, actual: number, hit: boolean, version: string | null = CLOUD_FORECAST_POLICY_VERSION) {
+  const target = followingSessions(day, 1)[0], close = equitySession(day)!.close, targetClose = equitySession(target)!.close;
+  const observed = new Date(close + 20 * 60000).toISOString(), generated = new Date(close + 30 * 60000).toISOString();
+  const snapshot = makeEvaluationSnapshot({ symbol: "SPY" }, { Date: day, Price: 100, "Adj Close": 100, Close: 100 }, "yahoo", observed, generated);
+  const forecastReturn = hit === (actual >= 0) ? .001 : -.001;
+  return { Ticker: "SPY", As_Of_Date: day, Created_At: generated, Policy_Version: version, Evaluation_Snapshot: { ...snapshot, frozen_at: generated },
+    Forecast_1D_Return: forecastReturn, Actual_1D_Return: actual, Actual_1D_Date: target, Actual_1D_Direction: actual >= 0 ? "Up" : "Down",
+    Raw_Direction_Correct: hit ? 1 : 0, Absolute_Return_Error: Math.abs(actual - forecastReturn), Settlement_Status: { "1D": "settled" },
+    Outcome_Evidence: { "1D": { source: "yahoo", price_basis: "Close", base_price: 100, actual_price: 100 * (1 + actual), target_session: target, source_observed_at: new Date(targetClose + 20 * 60000).toISOString(), settled_at: new Date(targetClose + 30 * 60000).toISOString() } } };
+}
+// `n` consecutive sessions from 2026-03-02, alternating up/down days (50% majority baseline),
+// with the first `hits` correct unless a hit pattern is given.
+function series(n: number, hitAt: (index: number) => boolean) {
+  const days: string[] = []; let day = "2026-02-27";
+  while (days.length < n) { day = followingSessions(day, 1)[0]; days.push(day); }
+  return days.map((d, i) => scored(d, i % 2 ? -.01 : .01, hitAt(i)));
+}
 const provenance = { source: "yahoo", price_basis: "Close", source_observed_at: "2026-09-03T20:30:00Z" };
 let worker: Miniflare;
 async function call(operation: string, payload: Record<string, unknown> = {}) {
@@ -26,7 +44,7 @@ beforeAll(async () => {
   const source = await readFile(`${root}functions/api/[[path]].ts`, "utf8");
   const marker = "return { handle, recordCacheMetric };";
   expect(source.split(marker)).toHaveLength(2);
-  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast, recordCloudForecast };");
+  const instrumented = source.replace(marker, "return { handle, recordCacheMetric, attachActualOutcomes, attachBacktestOutcomes, buildLedgerHistory, evaluateModelGovernance, reconcileCloudLedger, freezeCloudForecast, recordCloudForecast, buildForecastAction };");
   const result = await build({ stdin: { contents: instrumented + `
 export default { async fetch(request) {
  const input = await request.json(); const writes=[];
@@ -36,6 +54,7 @@ export default { async fetch(request) {
  if(input.operation==="settle") data=api.attachActualOutcomes(input.row,input.base ?? 100,input.future,input.provenance,input.now);
  if(input.operation==="history") data=api.buildLedgerHistory("SPY",input.rows,input.backtest || false);
  if(input.operation==="governance") data=api.evaluateModelGovernance("SPY",input.rows,input.previous || null);
+ if(input.operation==="action") { const g=api.evaluateModelGovernance("SPY",input.rows,null); data={governance:g,action:api.buildForecastAction(.05,80,{support:95,resistance:110,stop_loss:90,breakout:111,invalidation:90,invalidation_zh:"",invalidation_en:""},{backtest_samples:100,backtest_edge:10,calibration_samples:30,calibration_hit_rate:65,live_samples:0,live_edge:null,live_gate:g.evidence_gate,governance_status:g.status,fresh:true})}; }
  if(input.operation==="reconcile") data=await api.reconcileCloudLedger("SPY",input.rows);
  if(input.operation==="calendar") data={before:equitySession("2026-03-06"),after:equitySession("2026-03-09"),early:equitySession("2026-11-27")};
  if(input.operation==="record") { await api.recordCloudForecast("SPY",input.forecast,input.frozenAt,input.publicationId); data=true; }
@@ -185,6 +204,54 @@ describe("frozen forecast timing contract", () => {
     expect(unversioned.writes[0].value[0].Policy_Version).toBeNull();
     const older = await call("record", { rows: [], forecast: { ...base, policy_version: "cloud-forecast-policy-v0" }, frozenAt: row().Created_At, publicationId: "p2" });
     expect(older.writes[0].value[0].Policy_Version).toBe("cloud-forecast-policy-v0");
+  });
+  it("computes the Wilson 95% interval", () => {
+    const interval = wilsonInterval(56, 80)!;
+    expect(interval.low).toBeCloseTo(59.22, 1);
+    expect(interval.high).toBeCloseTo(78.92, 1);
+    expect(wilsonInterval(0, 0)).toBeNull();
+    expect(wilsonInterval(60, 60)!.high).toBeCloseTo(100, 9);
+  });
+  it("keeps Safe Mode until the per-asset, current-version evidence gate is met", async () => {
+    const governance = async (rows: unknown[], previous: unknown = null) => (await call("governance", { rows, previous })).data;
+    // 59 perfect outcomes: not enough samples.
+    const short = await governance(series(59, () => true));
+    expect(short.evidence_gate).toMatchObject({ status: "insufficient", samples: 59, required: 60 });
+    expect([short.status, short.active_model]).toEqual(["warming_up", "Orivane Ensemble Safe Mode"]);
+    expect(short.reason_zh).toContain("59/60");
+    // 60 outcomes at 60% vs a 50% baseline: lower bound ~47.4% is not above 50%.
+    const notMet = await governance(series(60, (i) => i % 5 < 3));
+    expect(notMet.evidence_gate.status).toBe("not_met");
+    expect(notMet.evidence_gate.ci_low).toBeLessThan(notMet.evidence_gate.majority_baseline_accuracy);
+    expect([notMet.status, notMet.active_model]).toEqual(["warming_up", "Orivane Ensemble Safe Mode"]);
+    // 80 outcomes at 70%: lower bound ~59.2% beats 50%.
+    const met = await governance(series(80, (i) => i % 10 < 7));
+    expect(met.evidence_gate).toMatchObject({ status: "met", samples: 80, hits: 56 });
+    expect([met.status, met.active_model]).toEqual(["stable", "Orivane Horizon Router"]);
+  });
+  it("lets protective rollback precede the gate but never lets watch bypass it", async () => {
+    // Former behaviour: 20+ samples with zero edge put the asset on watch, running the Router.
+    const flat = await (await call("governance", { rows: series(40, (i) => i % 2 === 0) })).data;
+    expect([flat.status, flat.active_model]).toEqual(["warming_up", "Orivane Ensemble Safe Mode"]);
+    // Gate met overall, but the latest 20 collapse: rollback wins.
+    const collapsed = await (await call("governance", { rows: series(100, (i) => i < 80 ? i % 10 < 9 : false) })).data;
+    expect(collapsed.evidence_gate.status).toBe("met");
+    expect([collapsed.status, collapsed.active_model]).toEqual(["rollback", "Orivane Ensemble Safe Mode"]);
+  });
+  it("generation-path action follows governance: rollback never acts even when the overall gate is met", async () => {
+    const collapsed = (await call("action", { rows: series(100, (i) => i < 80 ? i % 10 < 9 : false) })).data;
+    expect([collapsed.governance.status, collapsed.governance.evidence_gate.status]).toEqual(["rollback", "met"]);
+    expect(collapsed.action.actionable).toBe(false);
+    expect(collapsed.action.summary_zh).toContain("模型已回退到保守组合");
+    const healthy = (await call("action", { rows: series(80, (i) => i % 10 < 7) })).data;
+    expect([healthy.governance.status, healthy.action.actionable]).toEqual(["stable", true]);
+  });
+  it("counts one outcome per base date and ignores other policy versions in the gate", async () => {
+    const rows = series(60, () => true);
+    const duplicated = [...rows, { ...rows[0], Created_At: "2026-03-02T22:00:00Z" }];
+    const other = rows.map((row) => ({ ...row, Policy_Version: "cloud-forecast-policy-v0" }));
+    expect((await call("governance", { rows: duplicated })).data.evidence_gate.samples).toBe(60);
+    expect((await call("governance", { rows: other })).data.evidence_gate).toMatchObject({ status: "insufficient", samples: 0 });
   });
   it("does not grow the ledger for repeated unqualified or unknown same-day publications", async () => {
     for (const snapshot of [null, row().Evaluation_Snapshot]) {

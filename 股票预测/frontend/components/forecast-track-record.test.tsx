@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "@/lib/api";
-import type { ForecastScoreboard, LedgerStat } from "@/lib/types";
+import type { EvidenceGate, ForecastScoreboard, LedgerStat } from "@/lib/types";
 import { ForecastTrackRecord } from "./forecast-track-record";
 
 const app = vi.hoisted(() => ({ language: "zh", t: (key: string) => key }));
@@ -15,6 +15,10 @@ const stat = (horizon: string, extra: Partial<LedgerStat> = {}): LedgerStat => (
 const backtestStat = (horizon: string) => stat(horizon, { completed: 360, direction_accuracy: 47, majority_baseline_accuracy: 52.3, direction_edge: -5.3 });
 // Right after the timing contract ships: legacy outcomes exist but none qualify.
 const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
+const gate = (status: EvidenceGate["status"], samples: number, extra: Partial<EvidenceGate> = {}): EvidenceGate => ({ rule: "wilson95-low-gt-majority-v1", policy_version: "cloud-forecast-policy-v1", status, samples, required: 60, hits: 0, direction_accuracy: null, ci_low: null, ci_high: null, majority_baseline_accuracy: null, ...extra });
+// One per_asset entry per core symbol (SPY, QQQ, NVDA), each with the same gate unless `only` limits them.
+const withGate = (board: ForecastScoreboard, evidence: EvidenceGate | null, only = board.symbols): ForecastScoreboard => ({ ...board,
+  per_asset: only.map((symbol) => ({ ...board.per_asset[0], symbol, governance: board.per_asset[0].governance ? { ...board.per_asset[0].governance, evidence_gate: evidence } : null })) });
 const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" }]));
 
 const scoreboard: ForecastScoreboard = {
@@ -62,9 +66,9 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
 
   it("shows qualified-sample progress in the banner while live evidence accumulates", async () => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
-    vi.mocked(api.getForecastScoreboard).mockResolvedValue({ ...scoreboard, backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard, backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } }, gate("insufficient", 0)));
     render(<ForecastTrackRecord />);
-    await waitFor(() => expect(screen.getByText("实盘合格样本积累中（0/20）")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 0/60 · QQQ 0/60 · NVDA 0/60）")).toBeInTheDocument());
     expect(screen.getAllByText("等待合格样本").length).toBe(4);
   });
 
@@ -77,7 +81,7 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
       recent_live_records: [{ Symbol: "SPY", As_Of_Date: "2026-09-10", Best_Model: "Orivane Horizon Router", Forecast_1D_Return: 0.001, Actual_1D_Return: 0.002, Verified: true }] });
     const { container } = render(<ForecastTrackRecord />);
     await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
-    expect(container.textContent).not.toContain("当前模型已通过基础验证门槛");
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
     const qualified = within(container.querySelector(".score-summary") as HTMLElement).getByText("合格实盘样本").closest("article")!;
     expect(qualified.querySelector("strong")!.textContent).toBe("—");
     expect([...container.querySelectorAll(".record-state")].map((node) => node.textContent)).toEqual(["不计入"]);
@@ -85,19 +89,47 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
   });
 
   it.each([
-    ["30 qualified samples with a negative live edge", 30, -5, "当前模型尚未证明优于简单基准"],
-    ["20 qualified samples with zero live edge", 20, 0, "当前模型尚未证明优于简单基准"],
-    ["30 qualified samples with a missing live edge", 30, null, "实盘成绩暂不可判定"],
-    ["19 qualified samples", 19, 4, "实盘合格样本积累中（19/20）"],
-    ["30 qualified samples with a positive live edge", 30, 4, "当前模型已通过基础验证门槛"],
-  ])("banner for %s", async (_name, completed, edge, title) => {
+    ["an asset with 60 samples whose lower bound does not beat the baseline", gate("not_met", 60, { direction_accuracy: 55, ci_low: 42.5, ci_high: 67, majority_baseline_accuracy: 53 }), "当前模型尚未证明优于简单基准"],
+    ["59 samples", gate("insufficient", 59), "实盘证据积累中（SPY 59/60 · QQQ 59/60 · NVDA 59/60）"],
+    ["no gate in the response (old cache)", null, "实盘成绩暂不可判定"],
+    ["a met gate", gate("met", 80, { direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 }), "各核心资产均已达到既定证据门槛"],
+  ])("banner for %s", async (_name, evidence, title) => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
-    const qualifiedLive = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", completed: completed as number, direction_edge: edge as number | null, observed: completed as number, eligible: completed as number, ineligible: 0, unknown: 0, excluded: 0 });
-    vi.mocked(api.getForecastScoreboard).mockResolvedValue({ ...scoreboard,
-      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
-      live: { statistics: [qualifiedLive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(qualifiedLive) } });
-    render(<ForecastTrackRecord />);
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } }, evidence as EvidenceGate | null));
+    const { container } = render(<ForecastTrackRecord />);
     await waitFor(() => expect(screen.getByText(title as string)).toBeInTheDocument());
-    if (completed as number >= 20) expect(screen.queryByText(/实盘合格样本积累中/)).toBeNull();
+    if (evidence) expect(container.querySelector(".score-assets")!.textContent).toContain(`${(evidence as EvidenceGate).samples}/60`);
+  });
+
+  it.each([[["SPY"]], [["SPY", "QQQ"]]])("never claims every asset met when core assets %j are the only ones returned", async (only) => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    const met = gate("met", 80, { direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } }, met, only));
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
+  });
+
+  it("treats gates from another policy version as missing, never as met", async () => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } },
+      gate("met", 80, { policy_version: "cloud-forecast-policy-v0", direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 })));
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
+  });
+
+  it("never validates from a strong cross-asset total while an asset's own gate is short", async () => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    const strongTotal = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", completed: 100, direction_accuracy: 70, majority_baseline_accuracy: 52, direction_edge: 18, direction_accuracy_ci_low: 60.4, direction_accuracy_ci_high: 78.1, observed: 100, eligible: 100, ineligible: 0, unknown: 0, excluded: 0 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
+      live: { statistics: [strongTotal("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(strongTotal) } }, gate("insufficient", 33)));
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘证据积累中（SPY 33/60 · QQQ 33/60 · NVDA 33/60）")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
   });
 });

@@ -11,6 +11,19 @@ export const CLOUD_FORECAST_POLICY_VERSION = "cloud-forecast-policy-v1";
 export function isCurrentPolicy(row: Row): boolean {
   return row.Policy_Version === CLOUD_FORECAST_POLICY_VERSION;
 }
+// User-confirmed evidence gate (2026-10-24): per asset and current policy version, at least
+// 60 settled, time-qualified 1D outcomes, and the Wilson 95% lower bound of the hit rate
+// strictly above the same batch's majority-class baseline. A conservative usage gate, not a
+// paired significance test; repeated daily checks across correlated assets carry no joint 95%.
+export const LIVE_EVIDENCE_MIN_SAMPLES = 60;
+export const LIVE_EVIDENCE_RULE = "wilson95-low-gt-majority-v1";
+export function wilsonInterval(hits: number, n: number, z = 1.959963984540054): { low: number; high: number } | null {
+  if (!Number.isFinite(hits) || !Number.isFinite(n) || n <= 0 || hits < 0 || hits > n) return null;
+  const p = hits / n, z2 = z * z, denominator = 1 + z2 / n;
+  const centre = (p + z2 / (2 * n)) / denominator;
+  const half = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denominator;
+  return { low: Math.max(0, centre - half) * 100, high: Math.min(1, centre + half) * 100 };
+}
 // Settlement's check that the frozen base close was not revised. 0.01% absorbs float32
 // storage noise and the cent-level gap between Yahoo's after-close meta price (used to
 // freeze) and the later finalized bar; splits and real corrections are far larger.
