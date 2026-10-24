@@ -144,6 +144,8 @@ export const onRequest: PagesFunction = async ({ request, env, waitUntil }) => {
   const cache = (globalThis as typeof globalThis & { caches?: { default?: CloudflareCache } }).caches?.default;
   const cacheUrl = new URL(request.url);
   if (cacheUrl.pathname.replace(/\\/$/, "") === "/api/forecast/scoreboard") cacheUrl.searchParams.set("__evaluation_protocol", "frozen-close-v1");
+  // Every edge-cached response is namespaced by forecast policy, so a version change never serves old evidence.
+  cacheUrl.searchParams.set("__forecast_policy", CLOUD_FORECAST_POLICY_VERSION);
   const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
   if (cache && edgeCacheable(request)) {
     const cached = await cache.match(cacheKey);

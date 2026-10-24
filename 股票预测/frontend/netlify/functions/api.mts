@@ -4431,7 +4431,7 @@ async function aiAnalysisResponse(request: Request): Promise<Response> {
       forecast.generated_at,
       (predictionHistory?.statistics as Array<Record<string, unknown>> | undefined)?.find((item) => String(item.window) === "All")?.completed,
     ].join("|"));
-    const data = await cachedValue(`ai/gemini/v8/${configuredGeminiModel()}/${language}/${asset.symbol}/${freshness}/${stringHash(`${question}|${JSON.stringify(conversation)}`)}`, 6 * 3600, async () => {
+    const data = await cachedValue(`ai/gemini/v8/${CLOUD_FORECAST_POLICY_VERSION}/${configuredGeminiModel()}/${language}/${asset.symbol}/${freshness}/${stringHash(`${question}|${JSON.stringify(conversation)}`)}`, 6 * 3600, async () => {
       await enforceAiQuota(request);
       return geminiAnalysis(input);
     });
@@ -4674,6 +4674,12 @@ function attachActualOutcomes(row: Record<string, unknown>, currentPrice: number
   updated.Outcome_Evidence = evidence;
   updated.Settlement_Status = statuses;
   return updated;
+}
+
+// Derived caches that embed forecasts, governance or live/backtest evidence are namespaced by
+// policy version, so a version change can never serve (or stale-on-error fall back to) old evidence.
+function policyCacheKey(key: string): string {
+  return `${key}/${CLOUD_FORECAST_POLICY_VERSION}`;
 }
 
 // Live evidence: a time-qualified, settled outcome generated under the current policy version.
@@ -5345,7 +5351,9 @@ async function cloudLedgerHistory(symbol: string): Promise<Record<string, unknow
   return buildLedgerHistory(symbol, reconciled);
 }
 
-function applyCurrentForecastGuard(forecast: Record<string, unknown>, fresh = true): Record<string, unknown> {
+function applyCurrentForecastGuard(forecast: Record<string, unknown>, freshInput = true): Record<string, unknown> {
+  // Another (or no) policy version is never fresh, so its validation can never make it actionable.
+  const fresh = freshInput && forecast.policy_version === CLOUD_FORECAST_POLICY_VERSION;
   const horizonModels = Array.isArray(forecast.horizon_models) ? forecast.horizon_models as Array<Record<string, unknown>> : [];
   const month = horizonModels.find((item) => String(item.horizon) === "1M");
   const validation = forecast.validation && typeof forecast.validation === "object" ? forecast.validation as Record<string, unknown> : {};
@@ -5906,11 +5914,16 @@ async function readOnlyMarketSnapshot(symbol: string): Promise<Record<string, un
   if (forecastMeta.status === "available" && historyMeta.data_as_of && forecastMeta.data_as_of !== historyMeta.data_as_of) {
     forecastMeta.status = "stale"; forecastMeta.reason = "market_date_mismatch";
   }
+  // Read-only: never regenerate here. Another policy version is reported stale and shown as Observe.
+  const otherPolicy = Boolean(storedForecast) && storedForecast!.policy_version !== CLOUD_FORECAST_POLICY_VERSION;
+  if (otherPolicy && (forecastMeta.status === "available" || forecastMeta.status === "stale")) {
+    forecastMeta.status = "stale"; forecastMeta.reason = "policy_version_mismatch";
+  }
   if (storedForecast) {
     try {
       // The guard is pure, but may assume freshness. Only apply it to complete, aligned sources.
       const guarded = historyMeta.status === "available" && forecastMeta.status === "available"
-        ? applyCurrentForecastGuard(storedForecast) : storedForecast;
+        ? applyCurrentForecastGuard(storedForecast) : otherPolicy ? applyCurrentForecastGuard(storedForecast, false) : storedForecast;
       const levels = guarded.key_levels as Record<string, unknown> | undefined;
       forecast = { symbol, data_as_of: storedForecast.data_as_of, generated_at: forecastMeta.generated_at, signal: guarded.signal,
         forecast_1m_return: storedForecast.forecast_1m_return, confidence_score: toNumber(storedForecast.confidence_score),
@@ -5975,8 +5988,8 @@ async function route(request: Request, context: Context): Promise<Response> {
     const query = url.searchParams.get("q")?.trim();
     return query ? cachedJson({ query, results: await cachedValue(`search-v4/${aliasKey(query)}`, 6 * 3600, () => searchAssets(query)) }) : error(422, "validation_error", "Search query is required.");
   }
-  if (request.method === "GET" && path === "/home") return cachedJson({ data: await cachedValue("market/home-v5", 60 * 60, homeData) });
-  if (request.method === "GET" && path === "/forecast/scoreboard") return cachedJson({ data: await cachedValue("forecast/public-scoreboard-time-v1", 6 * 3600, forecastScoreboard) });
+  if (request.method === "GET" && path === "/home") return cachedJson({ data: await cachedValue(policyCacheKey("market/home-v5"), 60 * 60, homeData) });
+  if (request.method === "GET" && path === "/forecast/scoreboard") return cachedJson({ data: await cachedValue(policyCacheKey("forecast/public-scoreboard-time-v1"), 6 * 3600, forecastScoreboard) });
   if (request.method === "GET" && path === "/kronos/latest") {
     const symbol = String(url.searchParams.get("symbol") || "").toUpperCase();
     if (!symbol) return error(422, "validation_error", "Symbol is required.");
@@ -5998,7 +6011,7 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (request.method === "GET" && path === "/market/gainers") return cachedJson({ data: await cachedValue("market/gainers", 60 * 60, marketGainers) });
   if (request.method === "GET" && path === "/market/overview") return cachedJson({ data: await cachedValue("market/overview-v3", 60 * 60, marketOverview) });
   if (request.method === "GET" && path === "/screener") return cachedJson({ data: await cachedValue("market/screener-v5", 4 * 3600, async () => (await screenerRows()).map(slimScreenerRow)) });
-  if (request.method === "GET" && path === "/recommendations") return cachedJson({ data: await cachedValue("market/recommendations-v6", 4 * 3600, recommendations) });
+  if (request.method === "GET" && path === "/recommendations") return cachedJson({ data: await cachedValue(policyCacheKey("market/recommendations-v6"), 4 * 3600, recommendations) });
   if (path === "/ai/analysis/stream") return aiAnalysisStreamResponse(request);
   if (path === "/ai/analysis") return aiAnalysisResponse(request);
   if (request.method === "GET" && path === "/company/research") {
@@ -6123,7 +6136,7 @@ async function route(request: Request, context: Context): Promise<Response> {
         cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as Promise<{ records: HistoryRecord[] }>,
         cloudLedgerHistory(asset.symbol).catch(() => null),
       ]);
-      const data = await cachedValue(`performance/cloud-time-v1/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`, 6 * 3600, async () => modelPerformanceFromHistory(asset.symbol, historyData, liveHistory));
+      const data = await cachedValue(policyCacheKey(`performance/cloud-time-v1/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`), 6 * 3600, async () => modelPerformanceFromHistory(asset.symbol, historyData, liveHistory));
       return json({ data });
     } catch (cause) {
       const data = staticData("performance", symbol);
@@ -6140,7 +6153,7 @@ async function route(request: Request, context: Context): Promise<Response> {
         cachedPublicHistory(asset.symbol, start, asset.data_source, asset.asset_type) as Promise<{ records: HistoryRecord[] }>,
         cloudLedgerHistory(asset.symbol).catch(() => null),
       ]);
-      const backtestHistory = await cachedValue(`predictions/backtest-v4/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`, 6 * 3600, async () => predictionHistoryFromBacktest(asset.symbol, historyData)) as Record<string, unknown>;
+      const backtestHistory = await cachedValue(policyCacheKey(`predictions/backtest-v4/${asset.symbol}/${String((historyData.records.at(-1) || {}).Date)}`), 6 * 3600, async () => predictionHistoryFromBacktest(asset.symbol, historyData)) as Record<string, unknown>;
       const legacyHistory = staticData("history", asset.symbol) as Record<string, unknown> | null;
       const data = segmentedPredictionHistory(asset.symbol, backtestHistory, frozenHistory, legacyHistory);
       return json({ data });
