@@ -10,6 +10,7 @@ import { formatMetricPercent } from "@/lib/format";
 import { localizeModel } from "@/lib/i18n";
 import type { ForecastScoreAsset, ForecastScoreboard, LedgerRecord, LedgerStat } from "@/lib/types";
 import { useApp } from "./providers";
+import { StrategyComparisonSection } from "./strategy-comparison";
 import { EmptyState, Skeleton } from "./states";
 
 function all(stats: LedgerStat[]): LedgerStat | undefined {
@@ -190,6 +191,7 @@ export function ForecastTrackRecord() {
       const governance = asset.governance;
       return <article key={asset.symbol}><header><strong>{asset.symbol}</strong><span className={`governance-status ${governance?.status || "warming_up"}`}>{statusLabel(governance?.status || "warming_up", zh)}</span></header><dl><div><dt>{zh ? "回测优势" : "Backtest edge"}</dt><dd>{formatMetricPercent(assetBacktest?.direction_edge, true)}</dd></div><div><dt>{zh ? "合格样本（当前版本）" : "Qualified samples (current policy)"}</dt><dd>{governance?.evidence_gate ? `${governance.evidence_gate.samples}/${governance.evidence_gate.required}` : assetLive ? assetLive.completed : "—"}</dd></div><div><dt>{zh ? "实盘命中率" : "Live hit rate"}</dt><dd>{accuracyWithInterval(assetLive, zh)}</dd></div><div><dt>{zh ? "实盘优势" : "Live edge"}</dt><dd>{formatMetricPercent(assetLive?.direction_edge, true)}</dd></div><div><dt>Kronos</dt><dd>{asset.kronos?.data_as_of || (zh ? "等待批次" : "Awaiting batch")}</dd></div></dl><p>{governance ? (zh ? governance.reason_zh : governance.reason_en) : (zh ? "模型治理样本正在建立。" : "Model-governance evidence is accumulating.")}</p></article>;
     })}</div></section>
+    <StrategyComparisonSection assets={data.per_asset} zh={zh} />
     <p className="score-note">{zh ? "方向优势 = 模型方向准确率 - 同期多数类基准准确率。历史结果不代表未来表现。" : "Direction edge equals model directional accuracy minus the contemporaneous majority-class baseline. Historical results do not guarantee future performance."}</p>
   </main>;
 }
