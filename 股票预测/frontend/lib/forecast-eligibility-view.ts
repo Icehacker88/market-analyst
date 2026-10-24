@@ -1,3 +1,4 @@
+import { FORECAST_POLICY_VERSION } from "./forecast-policy";
 import type { Forecast, LedgerRecord, LedgerStat } from "./types";
 
 // Display helpers for the frozen-close-v1 timing contract (see docs/forecast-time-phase1-2026-10-19.md).
@@ -100,9 +101,10 @@ export function isCounted(row: LedgerRecord, horizon: string): boolean {
   return recordState(row, horizon) === "counted";
 }
 
-// Live statistics count as qualified evidence only when scored under the supported protocol.
+// Live statistics count as qualified evidence only when scored under the supported protocol and
+// the current forecast policy; anything else (e.g. a cached older response) is unconfirmed.
 export function isQualifiedStat(stat: LedgerStat | undefined): stat is LedgerStat {
-  return stat?.protocol === SUPPORTED_PROTOCOL;
+  return stat?.protocol === SUPPORTED_PROTOCOL && stat.policy_version === FORECAST_POLICY_VERSION;
 }
 
 export function qualifiedStats(stats: LedgerStat[] | undefined): LedgerStat[] {
@@ -112,7 +114,8 @@ export function qualifiedStats(stats: LedgerStat[] | undefined): LedgerStat[] {
 // A forecast's live evidence is trusted only if the forecast itself was produced under the
 // contract (it then carries evaluation_snapshot); older cached forecasts used contaminated counts.
 export function forecastLiveEvidence(forecast: Forecast): NonNullable<Forecast["validation"]>["live"] | null {
-  return forecast.evaluation_snapshot?.schema_version === SUPPORTED_PROTOCOL ? forecast.validation?.live ?? null : null;
+  return forecast.evaluation_snapshot?.schema_version === SUPPORTED_PROTOCOL && forecast.policy_version === FORECAST_POLICY_VERSION
+    ? forecast.validation?.live ?? null : null;
 }
 
 export function reasonLabel(code: string | null, zh: boolean): string {

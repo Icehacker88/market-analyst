@@ -88,10 +88,15 @@ describe("frozen forecast eligibility view", () => {
   it("trusts live statistics and forecast evidence only under the timing contract", () => {
     const base = { window: "All", completed: 100, pending: 0, hit_count: 60, miss_count: 40, direction_edge: 3 };
     expect(isQualifiedStat(base)).toBe(false);
-    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1" })).toBe(true);
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1" })).toBe(false); // no policy version: an older cached response
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v0" })).toBe(false);
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" })).toBe(true);
     const live = { samples: 49, direction_accuracy: 44, majority_baseline_accuracy: 54, direction_edge: -10 };
     const forecast = { validation: { live } } as unknown as Forecast;
     expect(forecastLiveEvidence(forecast)).toBeNull();
-    expect(forecastLiveEvidence({ ...forecast, evaluation_snapshot: { schema_version: "frozen-close-v1" } } as Forecast)).toEqual(live);
+    const contract = { ...forecast, evaluation_snapshot: { schema_version: "frozen-close-v1" } } as Forecast;
+    expect(forecastLiveEvidence(contract)).toBeNull();
+    expect(forecastLiveEvidence({ ...contract, policy_version: "cloud-forecast-policy-v0" })).toBeNull();
+    expect(forecastLiveEvidence({ ...contract, policy_version: "cloud-forecast-policy-v1" })).toEqual(live);
   });
 });

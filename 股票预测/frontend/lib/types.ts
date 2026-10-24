@@ -390,6 +390,7 @@ export type PeriodReturns = { symbol: string; data_as_of: string; returns: Recor
 
 export type Forecast = {
   evaluation_snapshot?: { schema_version?: string } | null;
+  policy_version?: string | null;
   symbol: string;
   best_model: string;
   base_price?: number | null;
@@ -646,6 +647,8 @@ export type LedgerStat = {
   median_absolute_return_error?: number | null;
   hit_count: number;
   miss_count: number;
+  policy_version?: string | null;
+  other_policy?: number;
 };
 
 export type PredictionHistory = {
