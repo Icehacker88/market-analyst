@@ -406,6 +406,7 @@ export type PeriodReturns = { symbol: string; data_as_of: string; returns: Recor
 
 export type Forecast = {
   evaluation_snapshot?: { schema_version?: string } | null;
+  policy_version?: string | null;
   symbol: string;
   best_model: string;
   base_price?: number | null;

@@ -14,12 +14,12 @@ afterEach(cleanup);
 const stat = (horizon: string, extra: Partial<LedgerStat> = {}): LedgerStat => ({ horizon, window: "All", completed: 0, pending: 0, hit_count: 0, miss_count: 0, direction_accuracy: null, majority_baseline_accuracy: null, direction_edge: null, ...extra });
 const backtestStat = (horizon: string) => stat(horizon, { completed: 360, direction_accuracy: 47, majority_baseline_accuracy: 52.3, direction_edge: -5.3 });
 // Right after the timing contract ships: legacy outcomes exist but none qualify.
-const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
+const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
 const gate = (status: EvidenceGate["status"], samples: number, extra: Partial<EvidenceGate> = {}): EvidenceGate => ({ rule: "wilson95-low-gt-majority-v1", policy_version: "cloud-forecast-policy-v1", status, samples, required: 60, hits: 0, direction_accuracy: null, ci_low: null, ci_high: null, majority_baseline_accuracy: null, ...extra });
 // One per_asset entry per core symbol (SPY, QQQ, NVDA), each with the same gate unless `only` limits them.
 const withGate = (board: ForecastScoreboard, evidence: EvidenceGate | null, only = board.symbols): ForecastScoreboard => ({ ...board,
   per_asset: only.map((symbol) => ({ ...board.per_asset[0], symbol, governance: board.per_asset[0].governance ? { ...board.per_asset[0].governance, evidence_gate: evidence } : null })) });
-const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1" }]));
+const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" }]));
 
 const scoreboard: ForecastScoreboard = {
   scope: "core", symbols: ["SPY", "QQQ", "NVDA"], data_as_of: "2026-10-19", generated_at: "2026-10-20T00:00:00Z", methodology: {},
@@ -112,9 +112,19 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
     expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
   });
 
+  it("treats gates from another policy version as missing, never as met", async () => {
+    const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
+    vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
+      backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) } },
+      gate("met", 80, { policy_version: "cloud-forecast-policy-v0", direction_accuracy: 70, ci_low: 59.2, ci_high: 78.9, majority_baseline_accuracy: 52 })));
+    const { container } = render(<ForecastTrackRecord />);
+    await waitFor(() => expect(screen.getByText("实盘成绩暂不可判定")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("各核心资产均已达到既定证据门槛");
+  });
+
   it("never validates from a strong cross-asset total while an asset's own gate is short", async () => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
-    const strongTotal = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", completed: 100, direction_accuracy: 70, majority_baseline_accuracy: 52, direction_edge: 18, direction_accuracy_ci_low: 60.4, direction_accuracy_ci_high: 78.1, observed: 100, eligible: 100, ineligible: 0, unknown: 0, excluded: 0 });
+    const strongTotal = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", completed: 100, direction_accuracy: 70, majority_baseline_accuracy: 52, direction_edge: 18, direction_accuracy_ci_low: 60.4, direction_accuracy_ci_high: 78.1, observed: 100, eligible: 100, ineligible: 0, unknown: 0, excluded: 0 });
     vi.mocked(api.getForecastScoreboard).mockResolvedValue(withGate({ ...scoreboard,
       backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
       live: { statistics: [strongTotal("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(strongTotal) } }, gate("insufficient", 33)));

@@ -171,6 +171,18 @@ describe("generated Worker strict read-only snapshot", () => {
     await cache.delete(key("forecast/public-scoreboard-time-v1"));
     await cache.delete(key(`forecast/public-scoreboard-time-v1/${CLOUD_FORECAST_POLICY_VERSION}`));
   });
+  it("never serves a batch snapshot with forecasts cached under another policy version", async () => {
+    const cache = await worker.getKVNamespace(bindings[0]) as unknown as { delete(key: string): Promise<void> };
+    const entry = (marker: string) => ({ value: [{ asset: { symbol: "SPY" }, forecast: { symbol: "SPY", policy_version: marker, signal: "Up", action: { actionable: true } }, errors: [] }], stored_at: new Date().toISOString(), expires_at: Date.now() + 3_600_000 });
+    const oldKey = key("market/snapshot-v1/all/lite/2025-01-01/SPY"), currentKey = key(`market/snapshot-v1/all/lite/2025-01-01/SPY/${CLOUD_FORECAST_POLICY_VERSION}`);
+    await put(bindings[0], oldKey, entry("OLD-POLICY-BATCH"));
+    const stale = await worker.dispatchFetch("https://test/api/market/snapshot?symbols=SPY&include=all&probe=old", { headers: { "x-test-default": "1" } });
+    expect(await stale.text()).not.toContain("OLD-POLICY-BATCH");
+    await put(bindings[0], currentKey, entry("CURRENT-POLICY-BATCH"));
+    const current = await worker.dispatchFetch("https://test/api/market/snapshot?symbols=SPY&include=all&probe=current", { headers: { "x-test-default": "1" } });
+    expect(await current.text()).toContain("CURRENT-POLICY-BATCH");
+    await cache.delete(oldKey); await cache.delete(currentKey);
+  });
   it("isolates malformed guard evidence instead of failing the entire batch", async () => {
     await seed("GUARDFAIL"); await seed("GUARDOK");
     await put(bindings[1], forecastKey("GUARDFAIL"), { ...forecast("GUARDFAIL"), horizon_models: [null] });

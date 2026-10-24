@@ -6077,7 +6077,9 @@ async function route(request: Request, context: Context): Promise<Response> {
     const requestedInclude = url.searchParams.get("include");
     const include = requestedInclude === "history" || requestedInclude === "forecast" ? requestedInclude : "all";
     if (!symbols.length) return error(422, "validation_error", "At least one symbol is required.");
-    const key = `market/snapshot-v1/${include}/${view}/${start}/${symbols.join(",")}`;
+    // Snapshots that carry forecasts are cached per policy version (they skip the serving guard on a hit).
+    const rawKey = `market/snapshot-v1/${include}/${view}/${start}/${symbols.join(",")}`;
+    const key = include === "history" ? rawKey : policyCacheKey(rawKey);
     return cachedJson({ data: await cachedValue(key, 15 * 60, () => marketSnapshots(symbols, start, view, include)) });
   }
   if (request.method === "GET" && path === "/market/returns") {

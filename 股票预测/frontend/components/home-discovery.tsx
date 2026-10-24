@@ -1,5 +1,7 @@
 "use client";
 
+import { HOME_PATH } from "@/lib/api";
+
 import { useState } from "react";
 import { ArrowRight, Check, Plus, RefreshCw, Info } from "lucide-react";
 import { assetPath } from "@/lib/asset-catalog";
@@ -15,7 +17,7 @@ import s from "./home.module.css";
 export function HomeDiscovery() {
   const { language, favorites, toggleFavorite } = useApp();
   const zh = language === "zh";
-  const resource = useHomeResource<HomeData>("/api/home");
+  const resource = useHomeResource<HomeData>(HOME_PATH);
   const [view, setView] = useState<DiscoveryView>("year");
   const [page, setPage] = useState(0);
   const rows = discoveryCandidates(resource.data, view);
