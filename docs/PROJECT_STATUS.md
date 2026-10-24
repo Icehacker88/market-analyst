@@ -41,7 +41,19 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
 - 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
 - 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
-- **Production 当前版本（2026-10-22 马来西亚时间 21:51 发布，即美东 10-22 盘中；用户确认部署与回滚方案）**：部署 `405d22b6-cee0-4eb0-8fce-4a56a5ac032f`，来源 main `3f263f8`（完整 SHA）。上线内容：[PR #32](https://github.com/Icehacker88/market-analyst/pull/32) HISTORY-CPU-1102——历史接口缓存未命中时同步执行的 walk-forward 回测提速，结果与原实现逐值一致；只改 `api.mts`，依赖、配置和密钥不变。构建方式同前（干净 worktree、437 项测试、typecheck、跳过 SEO 刷新的完整构建、`--branch=main`）。**回滚目标**：`97b6ec48`（来源 `1ad615c`）。**1102 验证**：
+- **Production 当前版本（2026-10-24 马来西亚时间 16:5x 发布，周六休市；用户确认部署与回滚方案）**：部署 `5a91d10d-3989-4d0e-9e80-a0794cbf2762`，来源 main `c5e0a49`（完整 SHA）。上线内容：
+  - [PR #36](https://github.com/Icehacker88/market-analyst/pull/36) MODEL-VERSION-CLOUD：预测政策版本 `cloud-forecast-policy-v1` 在生成时写入，并随预测、存档、缓存、账本传递；旧版或无版本的缓存一律视为过期；派生的 KV、边缘和浏览器缓存都按版本隔离；展示层只接受当前版本的统计和证据。
+  - [PR #37](https://github.com/Icehacker88/market-analyst/pull/37) EVIDENCE-GATE：每资产当前版本至少 60 个合格 1D 样本，且 Wilson 95% 下限高于多数类基准，才能离开 Safe Mode 或给出操作建议；状态优先级为 rollback > 证据门未过 > watch > stable；治理状态对操作建议有独立的硬否决；按完整核心资产集合判断。
+  - 依赖和配置未变；构建方式同前（干净 worktree、464 项测试、typecheck、跳过 SEO 刷新的完整构建）。
+  - **回滚目标**：`405d22b6`（来源 `3f263f8`）。
+  - **部署后检查**：
+    - 主要页面和接口均返回 200，`/api/auth/config` 不变；8 个资产的历史接口均为 200。
+    - SPY/QQQ/NVDA 预测为 v1，状态 `warming_up` / Safe Mode，证据门 `insufficient 0/60`，`actionable=false`，显示 Observe。
+    - scoreboard 每个资产都带证据门，当前版本已完成样本 0，`other_policy=6`。
+    - 账本记录数不变（71/42/57），存储字段逐条不变；旧记录 `Policy_Current=false`，不计入；周五 10-23 已有合格记录，按设计没有追加 v1 记录。第一个计入的样本是 10-26 收盘后的记录。
+    - 浏览器：战绩页资产卡显示“合格样本（当前版本）0/60”；因为回测优势为负，横幅显示“当前模型尚未证明优于简单基准”；首页显示“SPY 0/60 · QQQ 0/60 · NVDA 0/60”，并保留提示；资产页显示新的说明，旧记录注明“非当前预测政策版本”；1280px 和 375px 都不溢出，控制台无错误。
+    - 只读 tail：39 个请求全部 `ok`。缓存冷启动的首次请求 CPU：scoreboard 285 ms，SPY 预测 152 ms。
+- **上一版 Production（2026-10-22 马来西亚时间 21:51 发布，即美东 10-22 盘中；用户确认部署与回滚方案）**：部署 `405d22b6-cee0-4eb0-8fce-4a56a5ac032f`，来源 main `3f263f8`（完整 SHA）。上线内容：[PR #32](https://github.com/Icehacker88/market-analyst/pull/32) HISTORY-CPU-1102——历史接口缓存未命中时同步执行的 walk-forward 回测提速，结果与原实现逐值一致；只改 `api.mts`，依赖、配置和密钥不变。构建方式同前（干净 worktree、437 项测试、typecheck、跳过 SEO 刷新的完整构建、`--branch=main`）。**回滚目标**：`97b6ec48`（来源 `1ad615c`）。**1102 验证**：
   - 部署前：SPY/QQQ/NVDA/AAPL 返回 200，MSFT/AMD/TSM/MU 返回 503 1102。
   - 部署后用只读 `wrangler pages deployment tail` 观察：8 个资产冷缓存首次读取全部 200，`outcome: ok`，CPU 21–152 ms（MSFT 最高）；第二次（缓存命中）CPU 8–30 ms。整个观察窗口内 39 个生产请求全部 `ok`，最高为 scoreboard 的 300 ms。
   - 注意：实测 CPU 明显高于 Workers Free 名义上的 10 ms，平台目前容忍这样的突发，因此“现在不报 1102”不等于以后不会，需要继续观察（#33 每晚的历史读取会提供持续证据）。
