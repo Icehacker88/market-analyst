@@ -1,3 +1,4 @@
+import { HOME_PATH } from "@/lib/api";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getHomeData } from "@/lib/api";
@@ -32,7 +33,7 @@ describe("homepage data semantics and refresh", () => {
   });
 
   it("shows stale cache, deduplicates its refresh, and replaces visible values after success", async () => {
-    localStorage.setItem("orivane-response-v2:/api/home", JSON.stringify({ value: { data: data(1) }, storedAt: Date.now() - 16 * 60_000 }));
+    localStorage.setItem(`orivane-response-v2:${HOME_PATH}`, JSON.stringify({ value: { data: data(1) }, storedAt: Date.now() - 16 * 60_000 }));
     let release!: (response: Response) => void;
     vi.mocked(fetch).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
     render(<HomeDiscovery />);
@@ -47,7 +48,7 @@ describe("homepage data semantics and refresh", () => {
   });
 
   it("retains stale values on refresh failure and retries past local caches", async () => {
-    localStorage.setItem("orivane-response-v2:/api/home", JSON.stringify({ value: { data: data(1) }, storedAt: Date.now() - 16 * 60_000 }));
+    localStorage.setItem(`orivane-response-v2:${HOME_PATH}`, JSON.stringify({ value: { data: data(1) }, storedAt: Date.now() - 16 * 60_000 }));
     vi.mocked(fetch).mockRejectedValueOnce(new Error("offline"));
     render(<HomeDiscovery />);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("刷新失败"));

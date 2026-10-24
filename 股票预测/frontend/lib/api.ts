@@ -1,5 +1,6 @@
 import type { AiAnalysis, Asset, AuthSession, AuthUser, CompanyResearch, CompareSeries, Forecast, ForecastScoreboard, Gainer, History, HomeData, MarketOverview, MarketSnapshot, MetricsSummary, Performance, PeriodReturns, PredictionHistory, Recommendations, ScreenerRow, UserState } from "./types";
 import { readOfflineResponse, removeOfflineResponse, writeOfflineResponse } from "./offline-store";
+import { FORECAST_POLICY_VERSION, policyPath, withCurrentPolicyGuard } from "./forecast-policy";
 
 const SEARCH_CACHE_MS = 30 * 60 * 1000;
 const RESPONSE_CACHE_PREFIX = "orivane-response-v2:";
@@ -9,11 +10,13 @@ const INFLIGHT_GETS = new Map<string, Promise<unknown>>();
 // Live scores follow the frozen-close timing contract. Versioned paths keep browser caches
 // (localStorage and IndexedDB, up to 24h stale) from serving responses scored the old way.
 export const EVALUATION_CONTRACT = "frozen-close-v1";
-export const SCOREBOARD_PATH = `/api/forecast/scoreboard?v=3&contract=${EVALUATION_CONTRACT}` as const;
+// Forecast/evidence paths also carry the forecast policy version (see lib/forecast-policy.ts).
+export const SCOREBOARD_PATH = `/api/forecast/scoreboard?v=3&contract=${EVALUATION_CONTRACT}&policy=${FORECAST_POLICY_VERSION}` as const;
+export const HOME_PATH = `/api/home?policy=${FORECAST_POLICY_VERSION}` as const;
 function contractPath(path: string): string {
-  return `${path}${path.includes("?") ? "&" : "?"}contract=${EVALUATION_CONTRACT}`;
+  return policyPath(`${path}${path.includes("?") ? "&" : "?"}contract=${EVALUATION_CONTRACT}`);
 }
-export type HomeResponsePath = "/api/home" | typeof SCOREBOARD_PATH;
+export type HomeResponsePath = typeof HOME_PATH | typeof SCOREBOARD_PATH;
 export type HomeResponseEvent = {
   status: "loading" | "ready" | "stale" | "error";
   payload?: unknown;
@@ -300,7 +303,7 @@ export async function getMarketOverview(): Promise<MarketOverview> {
 }
 
 export async function getHomeData(refresh = false): Promise<HomeData> {
-  return (await request<{ data: HomeData }>("/api/home", refresh ? { cache: "reload" } : undefined)).data;
+  return (await request<{ data: HomeData }>(HOME_PATH, refresh ? { cache: "reload" } : undefined)).data;
 }
 
 export async function getForecastScoreboard(refresh = false): Promise<ForecastScoreboard> {
@@ -308,11 +311,11 @@ export async function getForecastScoreboard(refresh = false): Promise<ForecastSc
 }
 
 export async function getScreener(): Promise<ScreenerRow[]> {
-  return (await request<{ data: ScreenerRow[] }>("/api/screener?v=5")).data;
+  return (await request<{ data: ScreenerRow[] }>(policyPath("/api/screener?v=5"))).data;
 }
 
 export async function getRecommendations(): Promise<Recommendations> {
-  return (await request<{ data: Recommendations }>("/api/recommendations?v=6")).data;
+  return (await request<{ data: Recommendations }>(policyPath("/api/recommendations?v=6"))).data;
 }
 
 export async function getAiAnalysis(symbol: string, language: "zh" | "en", question?: string, conversation?: { role: "user" | "assistant"; content: string }[], signal?: AbortSignal): Promise<AiAnalysis> {
@@ -452,15 +455,17 @@ export async function getMarketSnapshots(
     view,
     include,
     v: "1",
+    policy: FORECAST_POLICY_VERSION,
   });
-  return (await request<{ data: MarketSnapshot[] }>(`/api/market/snapshot?${params}`)).data;
+  const snapshots = (await request<{ data: MarketSnapshot[] }>(`/api/market/snapshot?${params}`)).data;
+  return Array.isArray(snapshots) ? snapshots.map((item) => item.forecast ? { ...item, forecast: withCurrentPolicyGuard(item.forecast) } : item) : snapshots;
 }
 
 // My Research owns its observable cache and loads bounded batches progressively.
 // Keep this opt-in transport separate from the existing snapshot consumers.
 export function researchSnapshotPath(symbols: string[], _start?: string): string {
   if (!symbols.length || symbols.length > 4) throw new Error("Research snapshot batches require 1–4 assets.");
-  const params = new URLSearchParams({ symbols: symbols.join(","), mode: "read-only", v: "2" });
+  const params = new URLSearchParams({ symbols: symbols.join(","), mode: "read-only", v: "2", policy: FORECAST_POLICY_VERSION });
   return `/api/market/snapshot?${params}`;
 }
 
@@ -483,11 +488,11 @@ export async function getForecast(symbol: string, force = false): Promise<Foreca
   const path = contractPath(`/api/forecast/latest?symbol=${encodeURIComponent(symbol)}${force ? `&refresh=${Date.now()}` : ""}`);
   const init = force ? { cache: "no-store" as const } : undefined;
   try {
-    return (await request<{ data: Forecast }>(path, init)).data;
+    return withCurrentPolicyGuard((await request<{ data: Forecast }>(path, init)).data);
   } catch (cause) {
     if (!(cause instanceof ApiError) || cause.status < 500) throw cause;
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    return (await request<{ data: Forecast }>(path, init)).data;
+    return withCurrentPolicyGuard((await request<{ data: Forecast }>(path, init)).data);
   }
 }
 

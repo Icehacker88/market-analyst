@@ -31,7 +31,7 @@ describe("asset prediction history under the timing contract", () => {
   });
 
   it("shows a protocol-confirmed zero as 0", () => {
-    const confirmed = { ...section([stat({ protocol: "frozen-close-v1", completed: 0, direction_accuracy: null, direction_edge: null })]), charts: { rolling_accuracy: [], scatter: [], timeline: [], errors: [] } };
+    const confirmed = { ...section([stat({ protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", completed: 0, direction_accuracy: null, direction_edge: null })]), charts: { rolling_accuracy: [], scatter: [], timeline: [], errors: [] } };
     const { container } = render(<HistoryView predictions={history(confirmed)} />);
     expect(container.querySelector(".history-stat-strip strong")!.textContent).toBe("0");
     expect(screen.getByText("该来源暂时没有已完成验证的样本。")).toBeInTheDocument();
@@ -44,7 +44,7 @@ describe("asset prediction history under the timing contract", () => {
   });
 
   it("shows one change-log row per base date and compares against the prior date", () => {
-    const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1" } });
+    const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" } });
     const records = [
       { As_Of_Date: "2026-10-20", Best_Model: "ARIMA", Forecast_1D_Return: 0.001, Time_Eligibility: timing("ineligible", "base_session_unclosed") },
       { As_Of_Date: "2026-10-20", Best_Model: "ARIMA", Forecast_1D_Return: 0.004, Time_Eligibility: timing("eligible", "qualified") },

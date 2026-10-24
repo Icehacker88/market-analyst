@@ -14,8 +14,8 @@ afterEach(cleanup);
 const stat = (horizon: string, extra: Partial<LedgerStat> = {}): LedgerStat => ({ horizon, window: "All", completed: 0, pending: 0, hit_count: 0, miss_count: 0, direction_accuracy: null, majority_baseline_accuracy: null, direction_edge: null, ...extra });
 const backtestStat = (horizon: string) => stat(horizon, { completed: 360, direction_accuracy: 47, majority_baseline_accuracy: 52.3, direction_edge: -5.3 });
 // Right after the timing contract ships: legacy outcomes exist but none qualify.
-const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
-const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1" }]));
+const liveStat = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", observed: 49, eligible: 0, ineligible: 22, unknown: 28, excluded: 49 });
+const timing = (status: string, reason: string) => Object.fromEntries(["1D", "5D", "10D", "1M"].map((h) => [h, { status, reason, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" }]));
 
 const scoreboard: ForecastScoreboard = {
   scope: "core", symbols: ["SPY", "QQQ", "NVDA"], data_as_of: "2026-10-19", generated_at: "2026-10-20T00:00:00Z", methodology: {},
@@ -92,7 +92,7 @@ describe("ForecastTrackRecord with the frozen-close timing contract", () => {
     ["30 qualified samples with a positive live edge", 30, 4, "当前模型已通过基础验证门槛"],
   ])("banner for %s", async (_name, completed, edge, title) => {
     const positive = (horizon: string) => ({ ...backtestStat(horizon), direction_edge: 2.1 });
-    const qualifiedLive = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", completed: completed as number, direction_edge: edge as number | null, observed: completed as number, eligible: completed as number, ineligible: 0, unknown: 0, excluded: 0 });
+    const qualifiedLive = (horizon: string) => stat(horizon, { protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1", completed: completed as number, direction_edge: edge as number | null, observed: completed as number, eligible: completed as number, ineligible: 0, unknown: 0, excluded: 0 });
     vi.mocked(api.getForecastScoreboard).mockResolvedValue({ ...scoreboard,
       backtest: { statistics: [positive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(positive) },
       live: { statistics: [qualifiedLive("1D")], horizon_statistics: ["1D", "5D", "10D", "1M"].map(qualifiedLive) } });

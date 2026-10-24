@@ -9,6 +9,7 @@ import { createResearchDataLoader } from "../lib/my-research-data";
 import { deriveResearchCoverage, seedResearchBaseline } from "../lib/my-research";
 import type { ResearchDataEntry } from "../lib/my-research-data";
 import type { MarketSnapshot } from "../lib/types";
+import { CLOUD_FORECAST_POLICY_VERSION } from "../netlify/functions/_shared/forecast-eligibility";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const bindings = ["ORIVANE_API_CACHE", "ORIVANE_CLOUD_FORECASTS", "ORIVANE_API_METRICS", "ORIVANE_USER_STATE", "ORIVANE_AI_USAGE", "ORIVANE_ASSET_LOGOS"];
@@ -21,7 +22,7 @@ const key = (raw: string) => `v3/${encodeURIComponent(raw.toLowerCase()).replace
 const historyKey = (symbol: string, type = "market") => key(`history-v5/recent-${new Date().getUTCFullYear() - 4}/${symbol}/yahoo/${type}`);
 const forecastKey = (symbol: string) => `forecasts/v11/${symbol}.json`;
 const history = (symbol: string, date = day) => ({ symbol, data_source: "yahoo", data_as_of: date, snapshot: { latest_price: 100, return_1d: .01, annualized_volatility_20d: .25 }, records: Array.from({ length: 1000 }, (_, index) => ({ Date: date, Price: 100 + index / 100, SMA_20: 100, SMA_50: 100, RSI: 50 })) });
-const forecast = (symbol: string, date = day) => ({ symbol, data_as_of: date, generated_at: new Date(now - 60_000).toISOString(), signal: "Up", forecast_1m_return: .05, confidence_score: 75, key_levels: { invalidation: 90 }, validation: { backtest: { samples: 120, direction_edge: 10 } }, calibration: { sample_size: 30, direction_hit_rate: 60 } });
+const forecast = (symbol: string, date = day) => ({ symbol, data_as_of: date, policy_version: CLOUD_FORECAST_POLICY_VERSION, generated_at: new Date(now - 60_000).toISOString(), signal: "Up", forecast_1m_return: .05, confidence_score: 75, key_levels: { invalidation: 90 }, validation: { backtest: { samples: 120, direction_edge: 10 } }, calibration: { sample_size: 30, direction_hit_rate: 60 } });
 async function put(binding: string, key: string, value: unknown) { await (await worker.getKVNamespace(binding) as unknown as { put(key: string, value: string): Promise<void> }).put(key, JSON.stringify(value)); }
 async function seed(symbol: string, options: { market?: boolean; prediction?: boolean; age?: number; date?: string; type?: string } = {}) {
   if (options.market !== false) await put(bindings[0], historyKey(symbol, options.type), { value: history(symbol, options.date), stored_at: new Date(now - (options.age || 60_000)).toISOString(), expires_at: now - (options.age || 60_000) + 30 * 60_000 });
@@ -144,6 +145,43 @@ describe("generated Worker strict read-only snapshot", () => {
     expect((await request(["UNDATED"])).data[0].read_only?.forecast.status).toBe("stale");
     await seed("MISMATCH"); await put(bindings[1], forecastKey("MISMATCH"), forecast("MISMATCH", new Date(now - 86400_000).toISOString().slice(0, 10)));
     expect((await request(["MISMATCH"])).data[0].read_only?.forecast.reason).toBe("market_date_mismatch");
+  });
+  it("reports another or missing policy version as stale Observe without generating, writing or fetching", async () => {
+    for (const [symbol, version] of [["OLDPOLICY", "cloud-forecast-policy-v0"], ["NOPOLICY", undefined]] as const) {
+      await seed(symbol);
+      const stored: Record<string, unknown> = { ...forecast(symbol), signal: "Up", model_governance: { status: "stable", active_model: "Orivane Horizon Router", evidence_gate: { status: "met", samples: 80, required: 60 } } };
+      if (version) stored.policy_version = version; else delete stored.policy_version;
+      await put(bindings[1], forecastKey(symbol), stored);
+      const before = outbound.length;
+      const { data } = await request([symbol]);
+      expect(data[0].read_only?.forecast).toMatchObject({ status: "stale", reason: "policy_version_mismatch" });
+      expect(data[0].forecast?.signal).toBe("Observe");
+      expect(outbound.length).toBe(before);
+    }
+  });
+  it("never serves scoreboard evidence cached under another policy version", async () => {
+    const entry = (marker: string) => ({ value: { scope: marker, live: { statistics: [{ window: "All", completed: 60, direction_accuracy: 80 }] } }, stored_at: new Date().toISOString(), expires_at: Date.now() + 3_600_000 });
+    await put(bindings[0], key("forecast/public-scoreboard-time-v1"), entry("OLD-POLICY-SENTINEL"));
+    const stale = await worker.dispatchFetch("https://test/api/forecast/scoreboard?v=3&contract=frozen-close-v1&probe=old", { headers: { "x-test-default": "1" } });
+    expect(await stale.text()).not.toContain("OLD-POLICY-SENTINEL");
+    await put(bindings[0], key(`forecast/public-scoreboard-time-v1/${CLOUD_FORECAST_POLICY_VERSION}`), entry("CURRENT-POLICY-SENTINEL"));
+    const current = await worker.dispatchFetch("https://test/api/forecast/scoreboard?v=3&contract=frozen-close-v1&probe=current", { headers: { "x-test-default": "1" } });
+    expect(await current.text()).toContain("CURRENT-POLICY-SENTINEL");
+    const cache = await worker.getKVNamespace(bindings[0]) as unknown as { delete(key: string): Promise<void> };
+    await cache.delete(key("forecast/public-scoreboard-time-v1"));
+    await cache.delete(key(`forecast/public-scoreboard-time-v1/${CLOUD_FORECAST_POLICY_VERSION}`));
+  });
+  it("never serves a batch snapshot with forecasts cached under another policy version", async () => {
+    const cache = await worker.getKVNamespace(bindings[0]) as unknown as { delete(key: string): Promise<void> };
+    const entry = (marker: string) => ({ value: [{ asset: { symbol: "SPY" }, forecast: { symbol: "SPY", policy_version: marker, signal: "Up", action: { actionable: true } }, errors: [] }], stored_at: new Date().toISOString(), expires_at: Date.now() + 3_600_000 });
+    const oldKey = key("market/snapshot-v1/all/lite/2025-01-01/SPY"), currentKey = key(`market/snapshot-v1/all/lite/2025-01-01/SPY/${CLOUD_FORECAST_POLICY_VERSION}`);
+    await put(bindings[0], oldKey, entry("OLD-POLICY-BATCH"));
+    const stale = await worker.dispatchFetch("https://test/api/market/snapshot?symbols=SPY&include=all&probe=old", { headers: { "x-test-default": "1" } });
+    expect(await stale.text()).not.toContain("OLD-POLICY-BATCH");
+    await put(bindings[0], currentKey, entry("CURRENT-POLICY-BATCH"));
+    const current = await worker.dispatchFetch("https://test/api/market/snapshot?symbols=SPY&include=all&probe=current", { headers: { "x-test-default": "1" } });
+    expect(await current.text()).toContain("CURRENT-POLICY-BATCH");
+    await cache.delete(oldKey); await cache.delete(currentKey);
   });
   it("isolates malformed guard evidence instead of failing the entire batch", async () => {
     await seed("GUARDFAIL"); await seed("GUARDOK");

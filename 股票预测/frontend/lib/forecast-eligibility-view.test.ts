@@ -5,6 +5,16 @@ import type { Forecast } from "./types";
 const timing = (status: string, reason: string) => ({ "1D": { status, reason, protocol: "frozen-close-v1" }, "5D": { status, reason, protocol: "frozen-close-v1" } });
 
 describe("frozen forecast eligibility view", () => {
+  it("marks a timing-qualified record from another policy version as not counted, with its reason", () => {
+    const other = { Verified: false, Actual_1D_Return: 0.01, Time_Eligibility: timing("eligible", "qualified"), Outcome_Observed: { "1D": true }, Policy_Current: false };
+    expect(recordState(other, "1D")).toBe("excluded");
+    expect(reasonLabel(stateReasonCode(other, "1D"), true)).toBe("非当前预测政策版本，不计入当前证据");
+    const pendingOther = { ...other, Actual_1D_Return: undefined, Outcome_Observed: { "1D": false } };
+    expect(recordState(pendingOther, "1D")).toBe("excluded");
+    // Current-version records keep the existing states.
+    expect(recordState({ ...other, Policy_Current: true, Verified: true }, "1D")).toBe("counted");
+  });
+
   it("shows one change-log entry per base date, preferring the eligible same-day row", () => {
     const intraday = { As_Of_Date: "2026-10-20", Publication_ID: "intraday", Time_Eligibility: timing("ineligible", "base_session_unclosed") };
     const closed = { As_Of_Date: "2026-10-20", Publication_ID: "closed", Time_Eligibility: timing("eligible", "qualified") };
@@ -78,10 +88,15 @@ describe("frozen forecast eligibility view", () => {
   it("trusts live statistics and forecast evidence only under the timing contract", () => {
     const base = { window: "All", completed: 100, pending: 0, hit_count: 60, miss_count: 40, direction_edge: 3 };
     expect(isQualifiedStat(base)).toBe(false);
-    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1" })).toBe(true);
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1" })).toBe(false); // no policy version: an older cached response
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v0" })).toBe(false);
+    expect(isQualifiedStat({ ...base, protocol: "frozen-close-v1", policy_version: "cloud-forecast-policy-v1" })).toBe(true);
     const live = { samples: 49, direction_accuracy: 44, majority_baseline_accuracy: 54, direction_edge: -10 };
     const forecast = { validation: { live } } as unknown as Forecast;
     expect(forecastLiveEvidence(forecast)).toBeNull();
-    expect(forecastLiveEvidence({ ...forecast, evaluation_snapshot: { schema_version: "frozen-close-v1" } } as Forecast)).toEqual(live);
+    const contract = { ...forecast, evaluation_snapshot: { schema_version: "frozen-close-v1" } } as Forecast;
+    expect(forecastLiveEvidence(contract)).toBeNull();
+    expect(forecastLiveEvidence({ ...contract, policy_version: "cloud-forecast-policy-v0" })).toBeNull();
+    expect(forecastLiveEvidence({ ...contract, policy_version: "cloud-forecast-policy-v1" })).toEqual(live);
   });
 });
