@@ -41,7 +41,23 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
 - 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
 - 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
-- **Production 当前版本（2026-10-24 马来西亚时间 16:5x 发布，周六休市；用户确认部署与回滚方案）**：部署 `5a91d10d-3989-4d0e-9e80-a0794cbf2762`，来源 main `c5e0a49`（完整 SHA）。上线内容：
+- **Production 当前版本（2026-10-26 马来西亚时间 15:30 发布，即美东 10-26 开盘前；用户确认部署与回滚方案）**：部署 `af3ebc3c-0c6e-4dbb-aaa1-423e67906362`，来源 main `ee94674`（完整 SHA `ee94674f0de42efe3edcece19d8abd206dcafc49`）。上线内容：
+  - [PR #39](https://github.com/Icehacker88/market-analyst/pull/39) STRATEGY-VALUE：scoreboard 每个资产新增 `strategy.live` / `strategy.backtest`，规则为 `hypothetical-close-to-close-v1`。对比一直持有、只做多、按方向多空，实盘另加只按可操作信号；按换手扣 5bps；只计入历史数据抓取时间已确认收盘的交易日。战绩页新增“如果按信号操作”章节，标明假设性、非可执行收益。
+  - 只改展示与统计，不写账本、不改冻结和结算；依赖和配置未变。构建方式同前：干净 worktree、`npm ci`、跳过 SEO 刷新的 `build:cloudflare`、typecheck，新增的 16 项测试复跑通过；合并前完整 480 项测试通过，CI 也通过。
+  - **回滚目标**：`5a91d10d`（来源 `c5e0a49`）。回滚只换代码；KV 中带 `strategy` 字段的 scoreboard 缓存旧前端会忽略，无需清理。
+  - **部署后检查**：
+    - `/`、`/stocks/spy/`、`/api/auth/config` 均返回 200。部署前 scoreboard 的 KV 缓存已过期（存于 10-26 00:16Z，06:16Z 过期），部署后第一次请求即由新代码重建（07:31Z 写入，含 `strategy`），无需手动清缓存。
+    - scoreboard 返回 200，SPY/QQQ/NVDA 都带 `strategy`。实盘为 `no_data`，因为还没有当前版本的已结算样本。回测为 `ok`：2026-05-05 至 10-23，共 120 个交易日，数字与合并前本地用真实行情算出的结果一致：
+
+      | 资产 | 一直持有 | 只做多 | 多空 |
+      | --- | --- | --- | --- |
+      | SPY | +5.79% | −3.37% | −11.96% |
+      | QQQ | +4.63% | −2.55% | −10.10% |
+      | NVDA | +6.23% | −11.23% | −28.58% |
+
+    - 浏览器：`/track-record/` 显示新章节，切换到回测后表格数字与接口一致。
+    - 只读 tail：13 个请求全部 `ok`。scoreboard 冷缓存重建 CPU 473 ms（wall 3.9 s），高于上次的 285 ms；缓存命中时 1 ms。KV 缓存 6 小时，每 6 小时最多重建一次；仍高于 Workers Free 名义上的 10 ms，需继续观察。
+- **上一版 Production（2026-10-24 马来西亚时间 16:5x 发布，周六休市；用户确认部署与回滚方案）**：部署 `5a91d10d-3989-4d0e-9e80-a0794cbf2762`，来源 main `c5e0a49`（完整 SHA）。上线内容：
   - [PR #36](https://github.com/Icehacker88/market-analyst/pull/36) MODEL-VERSION-CLOUD：预测政策版本 `cloud-forecast-policy-v1` 在生成时写入，并随预测、存档、缓存、账本传递；旧版或无版本的缓存一律视为过期；派生的 KV、边缘和浏览器缓存都按版本隔离；展示层只接受当前版本的统计和证据。
   - [PR #37](https://github.com/Icehacker88/market-analyst/pull/37) EVIDENCE-GATE：每资产当前版本至少 60 个合格 1D 样本，且 Wilson 95% 下限高于多数类基准，才能离开 Safe Mode 或给出操作建议；状态优先级为 rollback > 证据门未过 > watch > stable；治理状态对操作建议有独立的硬否决；按完整核心资产集合判断。
   - 依赖和配置未变；构建方式同前（干净 worktree、464 项测试、typecheck、跳过 SEO 刷新的完整构建）。
