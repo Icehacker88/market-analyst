@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onRequest } from "../functions/api/[[path]]";
+import { equitySession } from "../netlify/functions/_shared/forecast-eligibility";
 
 type WorkerEnv = Parameters<typeof onRequest>[0]["env"];
 type JsonRecord = Record<string, unknown>;
@@ -132,9 +133,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+// The `count` sessions through `last`, each stamped at its open like Yahoo's daily bars.
+function sessionOpens(last: string, count: number): number[] {
+  const opens: number[] = [];
+  for (let cursor = Date.parse(`${last}T00:00:00Z`); opens.length < count; cursor -= 86400000) {
+    const session = equitySession(new Date(cursor).toISOString().slice(0, 10));
+    if (session) opens.unshift(session.open / 1000);
+  }
+  return opens;
+}
 
 describe("generated Cloudflare API session authentication", () => {
   it("keeps email signup, login and their existing cookie-session structure working", async () => {
@@ -392,9 +404,17 @@ describe("generated Cloudflare API session authentication", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("runs and persists a forecast for an existing session using a local market-data fixture", async () => {
+  // A fixed clock and session-aligned bars: during a publication window a qualified forecast needs
+  // the base session as the last bar, which calendar-day bars ending at "now" do not always give.
+  it.each([
+    ["before Monday's open (base: Friday)", "2026-10-26T07:30:00Z", "2026-10-23"],
+    ["after the close (base: that session)", "2026-10-27T21:00:00Z", "2026-10-27"],
+    ["intraday", "2026-10-27T15:00:00Z", "2026-10-27"],
+  ])("runs and persists a forecast for an existing session using a local market-data fixture, %s", async (_when, now, last) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
     const { env } = fixture();
-    const timestamp = Array.from({ length: 100 }, (_, index) => Math.floor(Date.now() / 1000) - (100 - index) * 86400);
+    const timestamp = sessionOpens(last, 100);
     const close = timestamp.map((_, index) => 100 + index * 0.15 + Math.sin(index / 4));
     vi.mocked(fetch).mockImplementation(async (input) => {
       if (!String(input).startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")) throw new Error("Unexpected fixture request");
