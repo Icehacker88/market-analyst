@@ -143,12 +143,32 @@ export type EvidenceGate = {
   majority_baseline_accuracy: number | null;
 };
 
+export type StrategyKey = "buy_hold" | "long_only" | "long_short" | "actionable_only";
+// Hypothetical close-to-close score (not executable); see netlify/functions/_shared/strategy-score.ts.
+export type StrategyComparison = {
+  rule: string;
+  source: "live" | "backtest";
+  basis: "Close";
+  cost_bps: number;
+  status: "ok" | "no_data" | "incomplete_price";
+  reason: string | null;
+  start_target: string | null;
+  end_target: string | null;
+  days: number;
+  signal_days: number;
+  missing_signal_days: number;
+  minimum_samples: number;
+  sufficient: boolean;
+  strategies: Array<{ key: StrategyKey; return_net: number; return_gross: number; return_after_exit: number; excess_vs_hold_net: number; trades: number; holding_days: number; win_rate: number | null; max_drawdown_net: number }>;
+};
+
 export type ForecastScoreAsset = {
   symbol: string;
   data_as_of: string | null;
   backtest: { statistics: LedgerStat[]; horizon_statistics: LedgerStat[] };
   live: { statistics: LedgerStat[]; horizon_statistics: LedgerStat[] };
   governance?: ForecastGovernance | null;
+  strategy?: { live: StrategyComparison; backtest: StrategyComparison } | null;
   kronos?: { model_id: string; data_as_of: string; generated_at: string } | null;
 };
 
