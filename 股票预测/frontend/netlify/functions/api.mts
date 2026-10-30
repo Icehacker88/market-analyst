@@ -4972,8 +4972,16 @@ async function persistModelGovernance(symbol: string, records: Array<Record<stri
   const store = getStore({ name: "orivane-cloud-forecasts", consistency: "strong" });
   const previous = await readModelGovernance(symbol).catch(() => null);
   const governance = evaluateModelGovernance(symbol, records, previous);
+  // Settlement and every forecast run re-evaluate governance; on the Workers Free plan each KV
+  // write counts against a 1,000/day cap, so an unchanged evaluation keeps the stored record.
+  if (previous && sameGovernance(previous, governance)) return previous;
   await store.setJSON(modelGovernanceKey(symbol), governance);
   return governance;
+}
+
+// Equal apart from when it was evaluated (key order is fixed by evaluateModelGovernance).
+function sameGovernance(a: ModelGovernance, b: ModelGovernance): boolean {
+  return JSON.stringify({ ...a, evaluated_at: null }) === JSON.stringify({ ...b, evaluated_at: null });
 }
 
 async function settleForecastSymbols(symbols: string[]): Promise<Record<string, unknown>> {
@@ -6215,15 +6223,18 @@ const handle = async (request: Request, context: Context): Promise<Response> => 
   const url = new URL(request.url);
   const readOnlySnapshot = request.method === "GET" && url.searchParams.get("mode") === "read-only" && /^\/(?:api|\.netlify\/functions\/api)\/market\/snapshot$/.test(url.pathname);
   const metricPath = `${request.method} ${url.pathname.replace(/^\/(?:api|\.netlify\/functions\/api)/, "") || "/"}`;
+  // The favorite optimizer's runs and prewarm requests report their own results; recording them
+  // (every 5xx is recorded) would spend the daily KV write cap on the metrics bucket.
+  const scheduledJob = request.headers.has("x-orivane-job") || request.headers.get("x-orivane-prewarm") === "1";
   try {
     const response = await route(request, context);
-    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
+    if (!readOnlySnapshot && !scheduledJob && shouldRecordRequestMetric(metricPath, response.status) && (response.status >= 500 || Math.random() < METRIC_SAMPLE_RATE)) {
       context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     }
     return response;
   } catch (cause) {
     const response = error(500, "internal_error", cause instanceof Error ? cause.message : "Unexpected error.");
-    if (!readOnlySnapshot && shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
+    if (!readOnlySnapshot && !scheduledJob && shouldRecordRequestMetric(metricPath, response.status)) context.waitUntil(recordRequestMetric(metricPath, response.status, Date.now() - started));
     return response;
   }
 };
