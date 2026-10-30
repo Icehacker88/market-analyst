@@ -41,7 +41,13 @@ Preview 验收依据为用户已接受的逐轮交付；不是本次重新执行
 - 当前主机为 Cloudflare Pages / Workers / KV；`netlify/functions/api.mts` 是维护源，Worker 经生成器更新。不要因此改用 Netlify 发布。
 - 本次只读核验 Pages 项目未连接 Git source；分支推送不触发该项目自动部署。现有两个 Actions 仅 schedule / workflow_dispatch，本次未启动任何任务。
 - 既有 Preview 地址：<https://codex-auth-phase1-preview.orivane-market-intelligence.pages.dev>。认证新提交未部署。
-- **Production 当前版本（2026-10-26 马来西亚时间 15:30 发布，即美东 10-26 开盘前；用户确认部署与回滚方案）**：部署 `af3ebc3c-0c6e-4dbb-aaa1-423e67906362`，来源 main `ee94674`（完整 SHA `ee94674f0de42efe3edcece19d8abd206dcafc49`）。上线内容：
+- **Production 当前版本（2026-10-30 马来西亚时间 23:1x 发布，即美东 10-30 盘中；用户确认部署）**：部署 `2ba12990-53e5-4bb5-acc5-f92107e9d845`，来源 main `886dc6a`（完整 SHA `886dc6ac5ae9da672ecc0d48887272bccf8c9e8a`）。上线内容：
+  - [PR #42](https://github.com/Icehacker88/market-analyst/pull/42) KV-WRITE-BUDGET：模型治理记录内容不变时不再重写；优化器和预热请求（`x-orivane-job` / `x-orivane-prewarm`）不再写入请求指标。
+  - 背景：Workers Free 每天 1,000 次 KV 写入。平时每天写 400–650 次，10-27 写到 1,427 次已超限；10-27 的合格记录在超限前已写入，没有丢失。后台写入主要来自 `orivane-favorite-optimizer` Worker（每天预热约 70 个资产），这次没有改动，仍待用户决定。
+  - 自 `ee94674` 以来的其他提交：只改文档或测试的 #40、#41，以及 Python 账本数据，不影响站点。构建方式同前：干净 worktree、`npm ci`、跳过 SEO 刷新的 `build:cloudflare`、typecheck，相关测试 51 项通过；合并前完整测试和 CI 均通过，Codex 已批准。优化器 Worker 没有重新部署。
+  - **回滚目标**：`af3ebc3c`（来源 `ee94674`）。没有数据格式变化。
+  - **部署后检查**：`/`、`/stocks/spy/`、`/track-record/`、`/api/auth/config`、scoreboard 均返回 200。部署前当天（10-30 UTC）已写 511 次。节省效果由 10-31 12:00（马来西亚时间）的一次性任务用 Cloudflare 分析数据核对。
+- **上一版 Production（2026-10-26 马来西亚时间 15:30 发布，即美东 10-26 开盘前；用户确认部署与回滚方案）**：部署 `af3ebc3c-0c6e-4dbb-aaa1-423e67906362`，来源 main `ee94674`（完整 SHA `ee94674f0de42efe3edcece19d8abd206dcafc49`）。上线内容：
   - [PR #39](https://github.com/Icehacker88/market-analyst/pull/39) STRATEGY-VALUE：scoreboard 每个资产新增 `strategy.live` / `strategy.backtest`，规则为 `hypothetical-close-to-close-v1`。对比一直持有、只做多、按方向多空，实盘另加只按可操作信号；按换手扣 5bps；只计入历史数据抓取时间已确认收盘的交易日。战绩页新增“如果按信号操作”章节，标明假设性、非可执行收益。
   - 只改展示与统计，不写账本、不改冻结和结算；依赖和配置未变。构建方式同前：干净 worktree、`npm ci`、跳过 SEO 刷新的 `build:cloudflare`、typecheck，新增的 16 项测试复跑通过；合并前完整 480 项测试通过，CI 也通过。
   - **回滚目标**：`5a91d10d`（来源 `c5e0a49`）。回滚只换代码；KV 中带 `strategy` 字段的 scoreboard 缓存旧前端会忽略，无需清理。
